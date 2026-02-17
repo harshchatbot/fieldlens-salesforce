@@ -12,6 +12,7 @@
 
   const el = {
     brandLinkBtn: document.getElementById('brandLinkBtn'),
+    modeBadge: document.getElementById('modeBadge'),
     contextLine: document.getElementById('contextLine'),
     closeBtn: document.getElementById('closeBtn'),
     errorBanner: document.getElementById('errorBanner'),
@@ -37,6 +38,7 @@
   setupEvents();
   setScanMode('quick');
   syncFlsFilterButtons();
+  setModeBadge(false);
   notifyParent({ source: 'fieldlens-panel', type: 'PANEL_READY' });
 
   window.addEventListener('message', (event) => {
@@ -132,6 +134,7 @@
     hideFlsControls();
     hideAllNotices();
     resetResults();
+    setModeBadge(false);
 
     if (!context || !context.isSupportedPage) {
       el.contextLine.textContent = context?.message || 'Unsupported page';
@@ -234,6 +237,7 @@
     hideAllNotices();
     resetResults();
     showLoading('Scanning references...');
+    setModeBadge(true);
 
     try {
       const result = await requestParent('scanImpact', { objectApiName, fieldApiName, scanMode: state.scanMode });
@@ -249,6 +253,7 @@
       el.copyBtn.disabled = true;
     } finally {
       hideLoading();
+      setModeBadge(false);
     }
   }
 
@@ -453,6 +458,17 @@
     el.modeDeepBtn.classList.toggle('mode-btn-active', state.scanMode === 'deep');
     el.modeQuickBtn.setAttribute('aria-pressed', state.scanMode === 'quick' ? 'true' : 'false');
     el.modeDeepBtn.setAttribute('aria-pressed', state.scanMode === 'deep' ? 'true' : 'false');
+    setModeBadge(false);
+  }
+
+  function setModeBadge(isRunning) {
+    if (!el.modeBadge) {
+      return;
+    }
+    const label = state.scanMode === 'deep' ? 'Deep' : 'Quick';
+    el.modeBadge.textContent = isRunning ? `Mode: ${label} - Scanning` : `Mode: ${label}`;
+    el.modeBadge.classList.toggle('mode-badge-deep', state.scanMode === 'deep');
+    el.modeBadge.classList.toggle('mode-badge-running', !!isRunning);
   }
 
   function setFlsFilter(filter) {

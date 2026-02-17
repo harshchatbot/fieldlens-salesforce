@@ -89,6 +89,28 @@ body {
   color: #3e7c3d;
 }
 
+.mode-badge {
+  display: inline-block;
+  margin: 4px 0 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #0f4d1c;
+  background: #e6f6e3;
+  border: 1px solid #bfe6b8;
+}
+
+.mode-badge.mode-badge-deep {
+  color: #2f2a00;
+  background: #fff7d6;
+  border-color: #f0dc8a;
+}
+
+.mode-badge.mode-badge-running {
+  animation: modePulse 900ms ease-in-out infinite;
+}
+
 .context-line {
   margin: 4px 0 0;
   font-size: 12px;
@@ -440,5 +462,15 @@ body {
   50% {
     opacity: 1;
     transform: scaleX(1);
+  }
+}
+
+@keyframes modePulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
   }
 }
