@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
+
+# Chrome Extension Packaging
+*.crx
+*.zip
+extension.pem
+
+# Reports generated files
+reports/*.html
+reports/*.json
