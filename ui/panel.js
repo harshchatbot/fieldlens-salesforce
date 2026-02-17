@@ -262,6 +262,7 @@
 
     const flsAll = Array.isArray(result.groups?.fieldPermissions) ? result.groups.fieldPermissions : [];
     const flsFiltered = filterFlsItems(flsAll, state.flsFilter);
+    const isDeep = (result.scanMode || state.scanMode) === 'deep';
     const groups = [
       { key: 'validationRules', label: 'Validation Rules' },
       { key: 'apexClasses', label: 'Apex Classes' },
@@ -269,6 +270,16 @@
       { key: 'flows', label: 'Flows (Best Effort)' },
       { key: 'fieldPermissions', label: 'FLS / Permissions', itemsOverride: flsFiltered, totalCount: flsAll.length }
     ];
+    if (isDeep) {
+      groups.splice(
+        4,
+        0,
+        { key: 'formulaFields', label: 'Formula Fields (Best Effort)' },
+        { key: 'pageLayouts', label: 'Page Layouts (Best Effort)' },
+        { key: 'listViews', label: 'List Views (Best Effort)' },
+        { key: 'reportTypes', label: 'Report Types (Best Effort)' }
+      );
+    }
 
     el.resultsContainer.innerHTML = '';
     let total = 0;
@@ -351,6 +362,10 @@
       ['Apex Classes', result.groups?.apexClasses || []],
       ['Apex Triggers', result.groups?.apexTriggers || []],
       ['Flows (Best Effort)', result.groups?.flows || []],
+      ['Formula Fields (Best Effort)', result.groups?.formulaFields || []],
+      ['Page Layouts (Best Effort)', result.groups?.pageLayouts || []],
+      ['List Views (Best Effort)', result.groups?.listViews || []],
+      ['Report Types (Best Effort)', result.groups?.reportTypes || []],
       ['FLS / Permissions', result.groups?.fieldPermissions || []]
     ];
 

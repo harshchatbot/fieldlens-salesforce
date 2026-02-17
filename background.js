@@ -56,12 +56,16 @@ async function handleScanImpact(message, tabId) {
     const validationSoql = `SELECT Id, ValidationName, Active, EntityDefinitionId, ErrorConditionFormula FROM ValidationRule ORDER BY ValidationName`;
     const flsSoql = `SELECT Id, ParentId, PermissionsRead, PermissionsEdit, SobjectType, Field, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.ProfileId, Parent.Profile.Name FROM FieldPermissions WHERE SobjectType = '${escapedObjectForSoql}' AND Field = '${escapedFullFieldForSoql}' ORDER BY Parent.Label`;
 
-    const [classesRes, triggersRes, validationRes, flowsRes, flsRes] = await Promise.allSettled([
+    const [classesRes, triggersRes, validationRes, flowsRes, flsRes, formulaRes, layoutRes, listViewRes, reportTypeRes] = await Promise.allSettled([
       runToolingQuery(baseUrl, apexClassSoql, tabId),
       runToolingQuery(baseUrl, apexTriggerSoql, tabId),
       runValidationRuleBestEffort(baseUrl, validationSoql, fieldApiName, tabId, isDeep),
       isDeep ? runFlowBestEffortQuery(baseUrl, escapedField, tabId) : Promise.resolve([]),
-      runDataQuery(baseUrl, flsSoql, tabId)
+      runDataQuery(baseUrl, flsSoql, tabId),
+      isDeep ? runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
+      isDeep ? runPageLayoutBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
+      isDeep ? runListViewBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
+      isDeep ? runReportTypeBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([])
     ]);
 
     const classes = filterByBodyFieldReference(resolveSettledRecords(classesRes, 'ApexClass'), fieldApiName).map((item) => ({
@@ -127,6 +131,34 @@ async function handleScanImpact(message, tabId) {
         accessType: item.PermissionsEdit ? 'readEdit' : item.PermissionsRead ? 'read' : 'none'
       };
     });
+    const formulaItems = formulaRes.status === 'fulfilled' ? formulaRes.value : [];
+    const formulaFields = formulaItems.map((item) => ({
+      id: item.Id,
+      name: `${item.TableEnumOrId || 'Unknown'}.${item.DeveloperName || 'Unknown'}`,
+      subtitle: 'Formula Field',
+      url: `${baseUrl}/lightning/setup/ObjectManager/${encodeURIComponent(item.TableEnumOrId || objectApiName)}/FieldsAndRelationships/${encodeURIComponent(item.DeveloperName || '')}/view`
+    }));
+    const layoutItems = layoutRes.status === 'fulfilled' ? layoutRes.value : [];
+    const pageLayouts = layoutItems.map((item) => ({
+      id: item.Id,
+      name: item.Name || item.Id,
+      subtitle: item.TableEnumOrId ? `Object: ${item.TableEnumOrId}` : 'Page Layout',
+      url: `${baseUrl}/lightning/setup/ObjectManager/${encodeURIComponent(item.TableEnumOrId || objectApiName)}/PageLayouts/view`
+    }));
+    const listViewItems = listViewRes.status === 'fulfilled' ? listViewRes.value : [];
+    const listViews = listViewItems.map((item) => ({
+      id: item.Id,
+      name: item.Name || item.DeveloperName || item.Id,
+      subtitle: item.SobjectType ? `Object: ${item.SobjectType}` : 'List View',
+      url: `${baseUrl}/lightning/o/${encodeURIComponent(item.SobjectType || objectApiName)}/list`
+    }));
+    const reportTypeItems = reportTypeRes.status === 'fulfilled' ? reportTypeRes.value : [];
+    const reportTypes = reportTypeItems.map((item) => ({
+      id: item.Id,
+      name: item.reportTypeName || item.Name || item.DeveloperName || item.Id,
+      subtitle: item.Field ? `Field: ${item.Field}` : 'Report Type',
+      url: `${baseUrl}/lightning/setup/ReportTypes/home`
+    }));
 
     const warnings = [];
     if (classesRes.status === 'rejected') warnings.push(classesRes.reason.message);
@@ -138,6 +170,10 @@ async function handleScanImpact(message, tabId) {
     }
     if (isDeep && flowsRes.status === 'rejected') warnings.push(flowsRes.reason.message);
     if (flsRes.status === 'rejected') warnings.push('FLS scan unavailable for this user/org permissions.');
+    if (isDeep && formulaRes.status === 'rejected') warnings.push(formulaRes.reason.message);
+    if (isDeep && layoutRes.status === 'rejected') warnings.push(layoutRes.reason.message);
+    if (isDeep && listViewRes.status === 'rejected') warnings.push(listViewRes.reason.message);
+    if (isDeep && reportTypeRes.status === 'rejected') warnings.push(reportTypeRes.reason.message);
 
     const coreResults = [classesRes, triggersRes, validationRes];
     // If all primary categories fail, return a top-level error instead of empty data.
@@ -158,14 +194,22 @@ async function handleScanImpact(message, tabId) {
         apexClasses: classes.length,
         apexTriggers: triggers.length,
         flows: flows.length,
-        fieldPermissions: fieldPermissions.length
+        fieldPermissions: fieldPermissions.length,
+        formulaFields: formulaFields.length,
+        pageLayouts: pageLayouts.length,
+        listViews: listViews.length,
+        reportTypes: reportTypes.length
       },
       groups: {
         validationRules,
         apexClasses: classes,
         apexTriggers: triggers,
         flows,
-        fieldPermissions
+        fieldPermissions,
+        formulaFields,
+        pageLayouts,
+        listViews,
+        reportTypes
       },
       warnings,
       generatedAt: Date.now(),
@@ -299,6 +343,98 @@ async function runFlowBestEffortQuery(baseUrl, escapedField, tabId) {
 
   if (lastError) {
     throw createError('FLOW_BEST_EFFORT_FAILED', 'Flow scan is unavailable in this org/API shape.');
+  }
+  return [];
+}
+
+async function runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const escapedObject = escapeSoqlValue(objectApiName);
+  const escapedFullField = escapeSoqlLike(fullFieldName);
+  const escapedField = escapeSoqlLike(fieldApiName);
+
+  const candidates = [
+    `SELECT Id, DeveloperName, TableEnumOrId, Metadata FROM CustomField WHERE Metadata LIKE '%${escapedFullField}%' ORDER BY TableEnumOrId, DeveloperName`,
+    `SELECT Id, DeveloperName, TableEnumOrId, Metadata FROM CustomField WHERE TableEnumOrId = '${escapedObject}' ORDER BY DeveloperName`
+  ];
+
+  let lastError;
+  for (const soql of candidates) {
+    try {
+      const records = await runToolingQuery(baseUrl, soql, tabId);
+      return records.filter((item) =>
+        containsFieldReferenceText(JSON.stringify(item?.Metadata || {}), fieldApiName, fullFieldName)
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    throw createError('FORMULA_SCAN_UNAVAILABLE', 'Formula field scan is unavailable in this org/API shape.');
+  }
+  return [];
+}
+
+async function runPageLayoutBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const escapedObject = escapeSoqlValue(objectApiName);
+  const soql = `SELECT Id, Name, TableEnumOrId, Metadata FROM Layout WHERE TableEnumOrId = '${escapedObject}' ORDER BY Name`;
+  try {
+    const records = await runToolingQuery(baseUrl, soql, tabId);
+    return records.filter((item) =>
+      containsFieldReferenceText(JSON.stringify(item?.Metadata || {}), fieldApiName, fullFieldName)
+    );
+  } catch (_) {
+    throw createError('LAYOUT_SCAN_UNAVAILABLE', 'Page Layout scan is unavailable in this org/API shape.');
+  }
+}
+
+async function runListViewBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const escapedObject = escapeSoqlValue(objectApiName);
+  const soql = `SELECT Id, Name, SobjectType, Query FROM ListView WHERE SobjectType = '${escapedObject}' ORDER BY Name`;
+  try {
+    const records = await runDataQuery(baseUrl, soql, tabId);
+    return records.filter((item) =>
+      containsFieldReferenceText(item?.Query || '', fieldApiName, fullFieldName)
+    );
+  } catch (_) {
+    throw createError('LIST_VIEW_SCAN_UNAVAILABLE', 'List View scan is unavailable in this org/API shape.');
+  }
+}
+
+async function runReportTypeBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const escapedObject = escapeSoqlValue(objectApiName);
+  const escapedFullField = escapeSoqlValue(fullFieldName);
+
+  const candidates = [
+    `SELECT Id, Field, ReportType.Name FROM ReportTypeColumn WHERE Field = '${escapedFullField}' ORDER BY ReportType.Name`,
+    `SELECT Id, Name, Description, SobjectType FROM ReportType WHERE SobjectType = '${escapedObject}' ORDER BY Name`
+  ];
+
+  let lastError;
+  for (const soql of candidates) {
+    try {
+      const records = await runDataQuery(baseUrl, soql, tabId);
+      if (soql.includes('ReportTypeColumn')) {
+        return records.map((item) => ({
+          Id: item.Id,
+          Field: item.Field,
+          reportTypeName: item.ReportType?.Name || 'Unknown Report Type'
+        }));
+      }
+      return records.filter((item) =>
+        containsFieldReferenceText(
+          `${item?.Name || ''} ${item?.Description || ''}`,
+          fieldApiName,
+          fullFieldName
+        )
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    throw createError('REPORT_TYPE_SCAN_UNAVAILABLE', 'Report Type scan is unavailable in this org/API shape.');
   }
   return [];
 }
@@ -464,6 +600,13 @@ function filterByBodyFieldReference(records, fieldApiName) {
     return [];
   }
   return records.filter((item) => String(item?.Body || '').toLowerCase().includes(needle));
+}
+
+function containsFieldReferenceText(text, fieldApiName, fullFieldName) {
+  const haystack = String(text || '').toLowerCase();
+  const shortNeedle = String(fieldApiName || '').toLowerCase();
+  const fullNeedle = String(fullFieldName || '').toLowerCase();
+  return (!!shortNeedle && haystack.includes(shortNeedle)) || (!!fullNeedle && haystack.includes(fullNeedle));
 }
 
 async function loadPermissionParentDetails(baseUrl, flsItems, tabId) {
