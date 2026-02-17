@@ -6,6 +6,8 @@
     selectedFieldApiName: null,
     lastScan: null,
     searchDebounceTimer: null,
+    resultSearchDebounceTimer: null,
+    resultSearchTerm: '',
     scanMode: 'quick',
     flsFilter: 'all'
   };
@@ -24,10 +26,15 @@
     copyBtn: document.getElementById('copyBtn'),
     modeQuickBtn: document.getElementById('modeQuickBtn'),
     modeDeepBtn: document.getElementById('modeDeepBtn'),
+    resultSearchWrap: document.getElementById('resultSearchWrap'),
+    resultSearchInput: document.getElementById('resultSearchInput'),
     loadingState: document.getElementById('loadingState'),
     loadingTextValue: document.getElementById('loadingTextValue'),
     emptyState: document.getElementById('emptyState'),
     resultsContainer: document.getElementById('resultsContainer'),
+    topImpact: document.getElementById('topImpact'),
+    topImpactCount: document.getElementById('topImpactCount'),
+    topImpactList: document.getElementById('topImpactList'),
     flsControls: document.getElementById('flsControls'),
     flsCounters: document.getElementById('flsCounters')
   };
@@ -86,6 +93,16 @@
       } catch (_) {
         showError('Could not copy summary on this page due to browser policy.');
       }
+    });
+
+    el.resultSearchInput.addEventListener('input', () => {
+      clearTimeout(state.resultSearchDebounceTimer);
+      state.resultSearchDebounceTimer = setTimeout(() => {
+        state.resultSearchTerm = (el.resultSearchInput.value || '').trim().toLowerCase();
+        if (state.lastScan) {
+          renderScanResult(state.lastScan);
+        }
+      }, 180);
     });
 
     el.fieldSearchInput.addEventListener('input', () => {
@@ -258,6 +275,11 @@
   }
 
   function renderScanResult(result) {
+    if (el.resultSearchWrap) {
+      el.resultSearchWrap.classList.remove('hidden');
+    }
+
+    renderTopImpact(result);
     renderFlsControls(result);
 
     const flsAll = Array.isArray(result.groups?.fieldPermissions) ? result.groups.fieldPermissions : [];
@@ -285,8 +307,9 @@
     let total = 0;
 
     for (const group of groups) {
-      const items =
+      const rawItems =
         group.itemsOverride || (Array.isArray(result.groups?.[group.key]) ? result.groups[group.key] : []);
+      const items = filterItemsBySearch(rawItems);
       total += items.length;
 
       const card = document.createElement('article');
@@ -295,7 +318,7 @@
       const head = document.createElement('header');
       head.className = 'result-group-header';
       const countLabel =
-        typeof group.totalCount === 'number' && group.totalCount !== items.length
+        typeof group.totalCount === 'number'
           ? `${items.length}/${group.totalCount}`
           : `${items.length}`;
       head.innerHTML = `<span>${group.label}</span><span>${countLabel}</span>`;
@@ -464,7 +487,111 @@
     el.resultsContainer.classList.add('hidden');
     el.resultsContainer.innerHTML = '';
     el.emptyState.classList.add('hidden');
+    if (el.resultSearchWrap) {
+      el.resultSearchWrap.classList.add('hidden');
+    }
+    hideTopImpact();
     hideFlsControls();
+  }
+
+  function renderTopImpact(result) {
+    if (!el.topImpact || !el.topImpactList || !el.topImpactCount) {
+      return;
+    }
+
+    const ranked = buildRankedImpactItems(result).filter(matchesResultSearch).slice(0, 5);
+    if (!ranked.length) {
+      hideTopImpact();
+      return;
+    }
+
+    el.topImpactCount.textContent = `${ranked.length} shown`;
+    el.topImpactList.innerHTML = ranked
+      .map(
+        (item) => `
+        <li class="top-impact-item">
+          <button type="button" class="top-impact-link" data-url="${escapeHtml(item.url || '')}">
+            <span class="top-impact-title">${escapeHtml(item.name || 'Unnamed')}</span>
+            <span class="top-impact-sub">${escapeHtml(item.groupLabel)} - ${escapeHtml(item.subtitle || '')}</span>
+          </button>
+        </li>
+      `
+      )
+      .join('');
+
+    el.topImpactList.querySelectorAll('[data-url]').forEach((node) => {
+      node.addEventListener('click', () => {
+        const url = node.getAttribute('data-url');
+        if (url) {
+          notifyParent({ source: 'fieldlens-panel', type: 'OPEN_LINK', url });
+        }
+      });
+    });
+
+    el.topImpact.classList.remove('hidden');
+  }
+
+  function hideTopImpact() {
+    if (!el.topImpact) {
+      return;
+    }
+    el.topImpact.classList.add('hidden');
+    if (el.topImpactList) {
+      el.topImpactList.innerHTML = '';
+    }
+    if (el.topImpactCount) {
+      el.topImpactCount.textContent = '0';
+    }
+  }
+
+  function buildRankedImpactItems(result) {
+    const groups = result.groups || {};
+    const riskOrder = [
+      { key: 'apexTriggers', label: 'Apex Trigger', score: 100 },
+      { key: 'validationRules', label: 'Validation Rule', score: 90 },
+      { key: 'flows', label: 'Flow', score: 80 },
+      { key: 'apexClasses', label: 'Apex Class', score: 70 },
+      { key: 'formulaFields', label: 'Formula Field', score: 60 },
+      { key: 'pageLayouts', label: 'Page Layout', score: 50 },
+      { key: 'reportTypes', label: 'Report Type', score: 40 },
+      { key: 'listViews', label: 'List View', score: 35 },
+      { key: 'fieldPermissions', label: 'FLS / Permissions', score: 20 }
+    ];
+
+    const ranked = [];
+    for (const group of riskOrder) {
+      const items = Array.isArray(groups[group.key]) ? groups[group.key] : [];
+      for (const item of items) {
+        ranked.push({
+          ...item,
+          score: group.score,
+          groupLabel: group.label
+        });
+      }
+    }
+
+    ranked.sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    return ranked;
+  }
+
+  function filterItemsBySearch(items) {
+    if (!state.resultSearchTerm) {
+      return items;
+    }
+    return items.filter(matchesResultSearch);
+  }
+
+  function matchesResultSearch(item) {
+    if (!state.resultSearchTerm) {
+      return true;
+    }
+    const haystack = `${item?.name || ''} ${item?.subtitle || ''}`.toLowerCase();
+    return haystack.includes(state.resultSearchTerm);
   }
 
   function setScanMode(mode) {

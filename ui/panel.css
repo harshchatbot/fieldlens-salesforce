@@ -250,6 +250,22 @@ body {
   cursor: not-allowed;
 }
 
+.result-search {
+  border: 1px solid #d9e6f2;
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px;
+}
+
+.result-search input {
+  width: 100%;
+  border: 1px solid #c8d8e8;
+  border-radius: 8px;
+  padding: 8px 9px;
+  font-size: 12px;
+  color: #1d3347;
+}
+
 .loading {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -379,6 +395,71 @@ body {
   font-size: 13px;
   color: #4f6478;
   background: #f8fcff;
+}
+
+.top-impact {
+  border: 1px solid #d8e6f4;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f4f9ff 100%);
+  padding: 8px;
+}
+
+.top-impact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #17324a;
+  padding: 2px 2px 8px;
+}
+
+.top-impact-count {
+  font-size: 11px;
+  font-weight: 800;
+  color: #015ca7;
+}
+
+.top-impact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.top-impact-item {
+  margin: 0;
+}
+
+.top-impact-link {
+  width: 100%;
+  border: 1px solid #dce7f1;
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  padding: 7px 8px;
+  cursor: pointer;
+}
+
+.top-impact-link:hover {
+  border-color: #97c1e7;
+  background: #f8fcff;
+}
+
+.top-impact-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #17324a;
+}
+
+.top-impact-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #557089;
 }
 
 .fls-controls {

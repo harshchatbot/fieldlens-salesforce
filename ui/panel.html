@@ -43,6 +43,10 @@
         <button id="copyBtn" class="secondary-btn" type="button" disabled>Copy Summary</button>
       </section>
 
+      <section id="resultSearchWrap" class="result-search hidden">
+        <input id="resultSearchInput" type="text" placeholder="Filter results across all groups" autocomplete="off" />
+      </section>
+
       <section id="loadingState" class="loading hidden" aria-live="polite">
         <div class="spinner-wrap">
           <div class="spinner" aria-hidden="true"></div>
@@ -58,6 +62,14 @@
       </section>
 
       <section id="emptyState" class="empty-state hidden">No impact found for this field.</section>
+
+      <section id="topImpact" class="top-impact hidden">
+        <div class="top-impact-head">
+          <strong>Top Impact</strong>
+          <span id="topImpactCount" class="top-impact-count">0</span>
+        </div>
+        <ul id="topImpactList" class="top-impact-list"></ul>
+      </section>
 
       <section id="flsControls" class="fls-controls hidden">
         <div id="flsCounters" class="fls-counters"></div>
