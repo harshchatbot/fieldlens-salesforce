@@ -9,7 +9,9 @@
     resultSearchDebounceTimer: null,
     resultSearchTerm: '',
     scanMode: 'quick',
-    flsFilter: 'all'
+    flsFilter: 'all',
+    loadingMessageTimer: null,
+    loadingMessageIndex: 0
   };
 
   const el = {
@@ -19,8 +21,6 @@
     closeBtn: document.getElementById('closeBtn'),
     errorBanner: document.getElementById('errorBanner'),
     warningBanner: document.getElementById('warningBanner'),
-    debugConsole: document.getElementById('debugConsole'),
-    debugClearBtn: document.getElementById('debugClearBtn'),
     recordFieldPicker: document.getElementById('recordFieldPicker'),
     fieldSearchInput: document.getElementById('fieldSearchInput'),
     fieldSelect: document.getElementById('fieldSelect'),
@@ -43,14 +43,11 @@
 
   const pendingRequestMap = new Map();
   let requestIdCounter = 0;
-  const debugEntries = [];
-  const maxDebugEntries = 120;
 
   setupEvents();
   setScanMode('quick');
   syncFlsFilterButtons();
   setModeBadge(false);
-  debugLog('panel_ready');
   notifyParent({ source: 'fieldlens-panel', type: 'PANEL_READY' });
 
   window.addEventListener('message', (event) => {
@@ -81,9 +78,6 @@
     el.closeBtn.addEventListener('click', () => {
       notifyParent({ source: 'fieldlens-panel', type: 'CLOSE_PANEL' });
     });
-    if (el.debugClearBtn) {
-      el.debugClearBtn.addEventListener('click', clearDebugLog);
-    }
 
     el.scanBtn.addEventListener('click', runScan);
     el.modeQuickBtn.addEventListener('click', () => setScanMode('quick'));
@@ -143,7 +137,6 @@
   }
 
   async function onContextUpdate(context) {
-    debugLog('context_update', context);
     const previous = state.context;
     const sameContext =
       previous &&
@@ -151,7 +144,6 @@
       previous.objectApiName === context?.objectApiName &&
       previous.fieldApiName === context?.fieldApiName;
     if (sameContext) {
-      debugLog('context_update_skip_duplicate', context);
       return;
     }
 
@@ -189,17 +181,11 @@
 
   async function loadObjectFields(objectApiName) {
     showLoading('Loading object fields...');
-    debugLog('load_fields_start', { objectApiName });
 
     try {
       const response = await requestParent('loadFields', { objectApiName });
       state.allFields = Array.isArray(response.fields) ? response.fields : [];
       applyFieldFilter(el.fieldSearchInput.value || '');
-      debugLog('load_fields_success', {
-        objectApiName,
-        count: state.allFields.length,
-        fromCache: !!response.fromCache
-      });
 
       if (!state.allFields.length) {
         showError('No fields found or Tooling API access is unavailable for FieldDefinition.');
@@ -208,7 +194,6 @@
       }
     } catch (error) {
       console.error('[FieldLens] loadFields failed', error);
-      debugLog('load_fields_error', normalizeErrorForLog(error));
       showError(error.message || 'Failed to load fields for this object.');
     } finally {
       hideLoading();
@@ -271,33 +256,20 @@
 
     hideAllNotices();
     resetResults();
-    showLoading('Scanning references...');
+    startScanLoading();
     setModeBadge(true);
-    debugLog('scan_start', {
-      objectApiName,
-      fieldApiName,
-      pageType: state.context.pageType
-    });
 
     try {
       const result = await requestParent('scanImpact', { objectApiName, fieldApiName, scanMode: state.scanMode });
       state.lastScan = result;
       el.copyBtn.disabled = false;
       renderScanResult(result);
-      debugLog('scan_success', {
-        objectApiName,
-        fieldApiName,
-        counts: result.counts || {},
-        warnings: result.warnings || [],
-        fromCache: !!result.fromCache
-      });
 
       if (Array.isArray(result.warnings) && result.warnings.length) {
         showWarning(result.warnings.join(' | '));
       }
     } catch (error) {
       console.error('[FieldLens] scanImpact failed', error);
-      debugLog('scan_error', normalizeErrorForLog(error));
       showError(error.message || 'Impact scan failed.');
       el.copyBtn.disabled = true;
     } finally {
@@ -321,17 +293,17 @@
       { key: 'validationRules', label: 'Validation Rules' },
       { key: 'apexClasses', label: 'Apex Classes' },
       { key: 'apexTriggers', label: 'Apex Triggers' },
-      { key: 'flows', label: 'Flows (Best Effort)' },
+      { key: 'flows', label: 'Flows' },
       { key: 'fieldPermissions', label: 'FLS / Permissions', itemsOverride: flsFiltered, totalCount: flsAll.length }
     ];
     if (isDeep) {
       groups.splice(
         4,
         0,
-        { key: 'formulaFields', label: 'Formula Fields (Best Effort)' },
-        { key: 'pageLayouts', label: 'Page Layouts (Best Effort)' },
-        { key: 'listViews', label: 'List Views (Best Effort)' },
-        { key: 'reportTypes', label: 'Report Types (Best Effort)' }
+        { key: 'formulaFields', label: 'Formula Fields' },
+        { key: 'pageLayouts', label: 'Page Layouts' },
+        { key: 'listViews', label: 'List Views' },
+        { key: 'reportTypes', label: 'Report Types' }
       );
     }
 
@@ -416,11 +388,11 @@
       ['Validation Rules', result.groups?.validationRules || []],
       ['Apex Classes', result.groups?.apexClasses || []],
       ['Apex Triggers', result.groups?.apexTriggers || []],
-      ['Flows (Best Effort)', result.groups?.flows || []],
-      ['Formula Fields (Best Effort)', result.groups?.formulaFields || []],
-      ['Page Layouts (Best Effort)', result.groups?.pageLayouts || []],
-      ['List Views (Best Effort)', result.groups?.listViews || []],
-      ['Report Types (Best Effort)', result.groups?.reportTypes || []],
+      ['Flows', result.groups?.flows || []],
+      ['Formula Fields', result.groups?.formulaFields || []],
+      ['Page Layouts', result.groups?.pageLayouts || []],
+      ['List Views', result.groups?.listViews || []],
+      ['Report Types', result.groups?.reportTypes || []],
       ['FLS / Permissions', result.groups?.fieldPermissions || []]
     ];
 
@@ -451,17 +423,14 @@
 
     pendingRequestMap.delete(payload.requestId);
     if (payload.ok) {
-      debugLog('request_response_ok', { requestId: payload.requestId });
       pending.resolve(payload.data);
     } else {
-      debugLog('request_response_error', normalizeErrorForLog(payload.error));
       pending.reject(payload.error || { message: 'Unknown panel response failure.' });
     }
   }
 
   function requestParent(action, payload) {
     const requestId = ++requestIdCounter;
-    debugLog('request_send', { requestId, action, payload });
     notifyParent({ source: 'fieldlens-panel', type: 'REQUEST', action, payload, requestId });
 
     return new Promise((resolve, reject) => {
@@ -485,18 +454,53 @@
   }
 
   function showLoading(text) {
+    stopScanLoading();
     el.loadingTextValue.textContent = text || 'Loading...';
     el.loadingState.classList.remove('hidden');
   }
 
   function hideLoading() {
+    stopScanLoading();
     el.loadingState.classList.add('hidden');
+  }
+
+  function startScanLoading() {
+    const messages = [
+      'Scanning references...',
+      'Analyzing Apex classes...',
+      'Analyzing Apex triggers...',
+      'Analyzing validation rules...',
+      'Analyzing field permissions...'
+    ];
+    if (state.scanMode === 'deep') {
+      messages.push('Analyzing flows...');
+      messages.push('Analyzing formula fields...');
+      messages.push('Analyzing page layouts...');
+      messages.push('Analyzing list views...');
+      messages.push('Analyzing report types...');
+    }
+
+    stopScanLoading();
+    state.loadingMessageIndex = 0;
+    el.loadingTextValue.textContent = messages[0];
+    el.loadingState.classList.remove('hidden');
+    state.loadingMessageTimer = setInterval(() => {
+      state.loadingMessageIndex = (state.loadingMessageIndex + 1) % messages.length;
+      el.loadingTextValue.textContent = messages[state.loadingMessageIndex];
+    }, 950);
+  }
+
+  function stopScanLoading() {
+    if (state.loadingMessageTimer) {
+      clearInterval(state.loadingMessageTimer);
+      state.loadingMessageTimer = null;
+    }
+    state.loadingMessageIndex = 0;
   }
 
   function showError(message) {
     el.errorBanner.textContent = message;
     el.errorBanner.classList.remove('hidden');
-    debugLog('ui_error', { message });
   }
 
   function hideError() {
@@ -711,54 +715,6 @@
       default:
         return items;
     }
-  }
-
-  function debugLog(label, data) {
-    const ts = new Date();
-    const timestamp = `${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}:${String(
-      ts.getSeconds()
-    ).padStart(2, '0')}.${String(ts.getMilliseconds()).padStart(3, '0')}`;
-    let serialized = '';
-    if (typeof data !== 'undefined') {
-      try {
-        serialized = `: ${JSON.stringify(data)}`;
-      } catch (_) {
-        serialized = `: ${String(data)}`;
-      }
-    }
-    debugEntries.push(`[${timestamp}] ${label}${serialized}`);
-    if (debugEntries.length > maxDebugEntries) {
-      debugEntries.splice(0, debugEntries.length - maxDebugEntries);
-    }
-    renderDebugLog();
-  }
-
-  function clearDebugLog() {
-    debugEntries.length = 0;
-    renderDebugLog();
-  }
-
-  function renderDebugLog() {
-    if (!el.debugConsole) {
-      return;
-    }
-    el.debugConsole.textContent = debugEntries.join('\n');
-    el.debugConsole.scrollTop = el.debugConsole.scrollHeight;
-  }
-
-  function normalizeErrorForLog(error) {
-    if (!error) {
-      return null;
-    }
-    if (typeof error === 'string') {
-      return { message: error };
-    }
-    return {
-      code: error.code || null,
-      message: error.message || String(error),
-      debug: error.debug || null,
-      detail: error.detail || null
-    };
   }
 
   function counterHtml(key, value) {

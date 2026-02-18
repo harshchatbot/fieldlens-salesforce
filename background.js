@@ -1,6 +1,6 @@
 const API_VERSION = 'v60.0';
 const CACHE_TTL_MS = 10 * 60 * 1000;
-const CACHE_SCHEMA_VERSION = 'v6';
+const CACHE_SCHEMA_VERSION = 'v8';
 
 const inFlightScans = new Map();
 const inFlightFieldLoads = new Map();
@@ -155,7 +155,7 @@ async function handleScanImpact(message, tabId) {
     const layoutItems = layoutRes.status === 'fulfilled' ? layoutRes.value : [];
     const pageLayouts = layoutItems.map((item) => ({
       id: item.Id,
-      name: item.Name || item.Id,
+      name: resolveLayoutDisplayName(item),
       subtitle: item.TableEnumOrId ? `Object: ${item.TableEnumOrId}` : 'Page Layout',
       url: `${baseUrl}/lightning/setup/ObjectManager/${encodeURIComponent(item.TableEnumOrId || objectApiName)}/PageLayouts/view`
     }));
@@ -337,16 +337,35 @@ async function runValidationRuleBestEffort(baseUrl, primarySoql, fieldApiName, t
 }
 
 async function runFlowBestEffortQuery(baseUrl, escapedField, tabId) {
-  // Flow tooling schema varies across org/API versions, so this is best-effort.
+  // Flow tooling schema varies heavily; query broad records first, then inspect content client-side.
+  const fieldNeedle = String(escapedField || '').replace(/\\'/g, "'").toLowerCase();
   const candidates = [
-    `SELECT Id, MasterLabel, Status FROM Flow WHERE Definition LIKE '%${escapedField}%' ORDER BY LastModifiedDate DESC`,
-    `SELECT Id, ApiName, Label, ProcessType FROM FlowDefinitionView WHERE Metadata LIKE '%${escapedField}%' ORDER BY LastModifiedDate DESC`
+    `SELECT Id, MasterLabel, Status, ProcessType FROM Flow ORDER BY LastModifiedDate DESC LIMIT 200`,
+    `SELECT Id, DeveloperName, MasterLabel, ProcessType FROM FlowDefinitionView ORDER BY LastModifiedDate DESC LIMIT 200`
   ];
 
-  let lastError;
+  const byId = new Map();
+  let hadSuccess = false;
+  let lastError = null;
+
   for (const soql of candidates) {
     try {
-      return await runToolingQuery(baseUrl, soql, tabId);
+      const records = await runToolingQuery(baseUrl, soql, tabId);
+      hadSuccess = true;
+      for (const item of records) {
+        const text = JSON.stringify(item || {}).toLowerCase();
+        if (fieldNeedle && text.includes(fieldNeedle)) {
+          byId.set(item.Id, item);
+        }
+      }
+
+      // If raw rows don't contain field references, inspect flow metadata details.
+      if (!byId.size && soql.includes(' FROM Flow ')) {
+        const detailed = await scanFlowMetadataDetails(baseUrl, records.slice(0, 80), fieldNeedle, tabId);
+        for (const item of detailed) {
+          byId.set(item.Id, item);
+        }
+      }
     } catch (error) {
       lastError = error;
       if (isPermissionError(error)) {
@@ -355,10 +374,47 @@ async function runFlowBestEffortQuery(baseUrl, escapedField, tabId) {
     }
   }
 
-  if (lastError) {
+  if (byId.size) {
+    return Array.from(byId.values());
+  }
+  if (!hadSuccess && lastError) {
     throw createError('FLOW_BEST_EFFORT_FAILED', 'Flow scan is unavailable in this org/API shape.');
   }
   return [];
+}
+
+async function scanFlowMetadataDetails(baseUrl, flowRecords, fieldNeedle, tabId) {
+  const matches = [];
+  if (!fieldNeedle) {
+    return matches;
+  }
+
+  for (const flow of flowRecords) {
+    const flowId = flow?.Id;
+    if (!flowId) {
+      continue;
+    }
+    try {
+      const detail = await runSingleJsonGet(
+        baseUrl,
+        `/services/data/${API_VERSION}/tooling/sobjects/Flow/${encodeURIComponent(flowId)}`,
+        tabId
+      );
+      const text = JSON.stringify(detail?.Metadata || detail || {}).toLowerCase();
+      if (!text.includes(fieldNeedle)) {
+        continue;
+      }
+      matches.push({
+        Id: flowId,
+        MasterLabel: flow?.MasterLabel || detail?.MasterLabel || detail?.Label || flowId,
+        Status: flow?.Status || detail?.Status || null
+      });
+    } catch (_) {
+      // best-effort: ignore individual flow metadata read errors
+    }
+  }
+
+  return matches;
 }
 
 async function runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
@@ -492,7 +548,12 @@ async function runPageLayoutBestEffortQuery(baseUrl, objectApiName, fieldApiName
         }
         byId.set(layoutId, {
           Id: layoutId,
-          Name: item?.Name || detail?.Name || layoutId,
+          Name: resolveLayoutDisplayName({
+            ...item,
+            ...detail,
+            Id: layoutId,
+            Metadata: detail?.Metadata || item?.Metadata
+          }),
           TableEnumOrId: item?.TableEnumOrId || detail?.TableEnumOrId || objectApiName
         });
       } catch (_) {
@@ -538,7 +599,10 @@ async function runPageLayoutDescribeBestEffort(baseUrl, objectApiName, fieldApiN
     const id = layout?.id || layout?.Id || layout?.name || `layout:${matches.length + 1}`;
     matches.push({
       Id: id,
-      Name: layout?.name || layout?.layoutName || id,
+      Name: resolveLayoutDisplayName({
+        ...layout,
+        Id: id
+      }),
       TableEnumOrId: objectApiName
     });
   }
@@ -916,6 +980,23 @@ function containsFieldReferenceText(text, fieldApiName, fullFieldName) {
   const shortNeedle = String(fieldApiName || '').toLowerCase();
   const fullNeedle = String(fullFieldName || '').toLowerCase();
   return (!!shortNeedle && haystack.includes(shortNeedle)) || (!!fullNeedle && haystack.includes(fullNeedle));
+}
+
+function resolveLayoutDisplayName(layout) {
+  const nameCandidate =
+    layout?.Name ||
+    layout?.name ||
+    layout?.layoutName ||
+    layout?.FullName ||
+    layout?.fullName ||
+    layout?.Metadata?.fullName ||
+    layout?.Metadata?.FullName ||
+    layout?.DeveloperName ||
+    null;
+  if (nameCandidate) {
+    return String(nameCandidate);
+  }
+  return layout?.Id || layout?.id || 'Unknown Layout';
 }
 
 async function loadPermissionParentDetails(baseUrl, flsItems, tabId) {
