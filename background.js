@@ -37,8 +37,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'FIELDLENS_OPEN_SALESFORCE') {
+    openExistingSalesforceTabOrLogin()
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((error) => sendResponse({ ok: false, error: toClientError(error) }));
+    return true;
+  }
+
   return false;
 });
+
+async function openExistingSalesforceTabOrLogin() {
+  const patterns = [
+    'https://*.lightning.force.com/*',
+    'https://*.my.salesforce.com/*',
+    'https://*.salesforce.com/*'
+  ];
+  const tabs = await chrome.tabs.query({ url: patterns });
+
+  const pick = tabs.find((tab) => /\/lightning\//i.test(tab.url || '')) || tabs[0];
+  if (pick && Number.isInteger(pick.id)) {
+    await chrome.tabs.update(pick.id, { active: true });
+    if (Number.isInteger(pick.windowId)) {
+      await chrome.windows.update(pick.windowId, { focused: true });
+    }
+    return { mode: 'existing_tab', tabId: pick.id, url: pick.url || null };
+  }
+
+  const created = await chrome.tabs.create({ url: 'https://login.salesforce.com' });
+  return { mode: 'new_login_tab', tabId: created?.id || null, url: created?.url || null };
+}
 
 async function handleScanImpact(message, tabId) {
   const { baseUrl, objectApiName, fieldApiName } = message;
@@ -1178,8 +1206,6 @@ async function forwardToolingQueryToTab(url, preferredTabId = null) {
 
 
 async function sendToolingQueryToTab(tabId, url) {
-  console.debug('[FieldLens] Forwarding tooling query to tab', tabId);
-
   // Helper: send message once
   async function _send() {
     try {
@@ -1279,7 +1305,6 @@ async function sendToolingQueryToTab(tabId, url) {
     // No response is unusual but handle it.
     // Try injection if on SF Lightning.
     if (await _isSalesforceLightningTab()) {
-      console.debug('[FieldLens] No response; attempting content.js injection + retry');
       await _injectContentScriptOnce();
 
       const response2 = await _send();
@@ -1296,7 +1321,6 @@ async function sendToolingQueryToTab(tabId, url) {
 
     if (isSf) {
       try {
-        console.debug('[FieldLens] sendMessage failed; injecting content.js + retry', error?.message);
         await _injectContentScriptOnce();
 
         const response2 = await _send();

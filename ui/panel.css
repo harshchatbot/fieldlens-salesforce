@@ -167,6 +167,17 @@ body {
   border: 1px solid #ffd48a;
 }
 
+.retry-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.retry-btn {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
 .diagnostics {
   border: 1px solid #dce5ee;
   border-radius: 10px;

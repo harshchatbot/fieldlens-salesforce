@@ -25,10 +25,31 @@ On first install, a welcome page opens automatically:
 
 - `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/welcome.html`
 
+## Public Documentation Page
+
+- Docs source: `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/docs/index.html`
+- Styles: `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/docs/styles.css`
+
+If you publish with GitHub Pages from this repo, this page can be hosted like:
+
+- `https://<your-username>.github.io/<repo-name>/docs/`
+
 ## Permissions
 
-- `storage`: caches scan results and local UI state for faster repeat scans.
-- `activeTab`, `scripting`: injects and runs the FieldLens panel/logic in the current Salesforce Lightning tab.
+- `storage`: stores UI settings and 10-minute local scan cache.
+- `scripting`, `activeTab`: injects content logic only in the active Salesforce Lightning tab.
+- `cookies`: reads only Salesforce `sid` cookie as a fallback when browser CORS/session behavior blocks tab-context API fetches.
+
+## Chrome Web Store Readiness
+
+- Host access is limited to Salesforce HTTPS domains only.
+- Web-accessible resources are restricted to Salesforce Lightning page matches.
+- No remote code execution, no dynamic eval, and no external script loading.
+- OAuth tokens are not stored; session is derived from active Salesforce login.
+- Review support docs:
+  - `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/PRIVACY.md`
+  - `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/SECURITY.md`
+  - `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/CHROME_WEB_STORE_CHECKLIST.md`
 
 ## Salesforce Sandbox Testing
 
@@ -73,6 +94,14 @@ Output:
 
 - Markdown report written to `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/reports/fieldlens-smoke-<timestamp>.md`
 - Includes PASS/FAIL/NOT_TESTED status per test plus a summary count.
+
+## Unit Tests
+
+Run lightweight unit tests (context parsing, CSV generation, settings normalization, group-filter logic):
+
+```bash
+node /Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/scripts/unit_tests.js
+```
 
 ## Notes
 

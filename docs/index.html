@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="FieldLens for Salesforce documentation" />
+    <title>FieldLens for Salesforce - Documentation</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero-inner">
+        <img src="../ui/techfi-logo.svg" alt="TechFi Labs" class="logo" />
+        <p class="eyebrow">TechFi Labs</p>
+        <h1>FieldLens for Salesforce</h1>
+        <p class="subtitle">Field impact scanner for Salesforce Lightning Admins and Developers.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://chromewebstore.google.com/" target="_blank" rel="noopener">Chrome Web Store</a>
+          <a class="btn" href="https://techfilabs.com" target="_blank" rel="noopener">TechFi Labs</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <nav class="toc">
+        <a href="#quick-start">Quick Start</a>
+        <a href="#features">Features</a>
+        <a href="#permissions">Permissions</a>
+        <a href="#troubleshooting">Troubleshooting</a>
+        <a href="#security">Security & Privacy</a>
+        <a href="#release">Release Notes</a>
+      </nav>
+
+      <section id="quick-start" class="card">
+        <h2>Quick Start</h2>
+        <ol>
+          <li>Install FieldLens and open Salesforce Lightning.</li>
+          <li>Go to either a field detail page or a record page.</li>
+          <li>Click the floating <strong>FieldLens</strong> button.</li>
+          <li>Select scan mode: <strong>Quick</strong> or <strong>Deep</strong>.</li>
+          <li>Run impact scan and review grouped references.</li>
+        </ol>
+        <p class="hint">Supported pages: <code>/lightning/setup/ObjectManager/.../FieldsAndRelationships/.../view</code> and <code>/lightning/r/Object/Id/view</code>.</p>
+      </section>
+
+      <section id="features" class="card">
+        <h2>Features</h2>
+        <ul>
+          <li>Automatic object/field detection on setup field pages.</li>
+          <li>Record-page field picker with search and type metadata.</li>
+          <li>Quick and Deep impact scans with grouped references.</li>
+          <li>FLS/Permissions visibility with profile/perm-set context.</li>
+          <li>Copy summary and CSV export.</li>
+          <li>Accordion results, expand/collapse controls, freshness badge.</li>
+          <li>Retry actions for failed field-load or scan operations.</li>
+        </ul>
+      </section>
+
+      <section id="permissions" class="card">
+        <h2>Permissions</h2>
+        <ul>
+          <li><code>storage</code>: local UI settings and short-lived cache.</li>
+          <li><code>activeTab</code> + <code>scripting</code>: run extension logic in the active Salesforce Lightning tab.</li>
+          <li><code>cookies</code>: Salesforce-session fallback only when tab-context API fetch is blocked.</li>
+          <li>Host access is restricted to Salesforce HTTPS domains.</li>
+        </ul>
+      </section>
+
+      <section id="troubleshooting" class="card">
+        <h2>Troubleshooting</h2>
+        <details>
+          <summary>Request timed out on deep scan</summary>
+          <p>Use Retry Scan. Deep mode inspects more metadata and can take longer in larger orgs.</p>
+        </details>
+        <details>
+          <summary>Flow/List View/Layout not showing</summary>
+          <p>Some metadata depends on org API shape and permissions. Use Deep mode and check Diagnostics.</p>
+        </details>
+        <details>
+          <summary>Clipboard copy blocked</summary>
+          <p>Use Export CSV as an alternative when browser policy blocks clipboard actions.</p>
+        </details>
+      </section>
+
+      <section id="security" class="card">
+        <h2>Security & Privacy</h2>
+        <p>FieldLens does not upload scan data to third-party servers. It uses your active Salesforce session and local browser storage.</p>
+        <div class="links">
+          <a href="../PRIVACY.md" target="_blank" rel="noopener">Privacy Policy</a>
+          <a href="../SECURITY.md" target="_blank" rel="noopener">Security Notes</a>
+          <a href="../CHROME_WEB_STORE_CHECKLIST.md" target="_blank" rel="noopener">Store Checklist</a>
+        </div>
+      </section>
+
+      <section id="release" class="card">
+        <h2>Release Notes</h2>
+        <p><strong>v1.1.0</strong></p>
+        <ul>
+          <li>Improved scanning coverage for flows, list views, and page layouts.</li>
+          <li>Accordion results with section controls and compact layout.</li>
+          <li>CSV export and persisted panel settings.</li>
+          <li>Retry actions and diagnostics/freshness UX improvements.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

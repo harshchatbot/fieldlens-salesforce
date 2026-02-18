@@ -23,6 +23,10 @@
       </header>
 
       <section id="errorBanner" class="error-banner hidden"></section>
+      <section id="retryActions" class="retry-actions hidden">
+        <button id="retryLoadBtn" class="secondary-btn retry-btn hidden" type="button">Retry Load Fields</button>
+        <button id="retryScanBtn" class="secondary-btn retry-btn hidden" type="button">Retry Scan</button>
+      </section>
       <section id="warningBanner" class="warning-banner hidden"></section>
       <section id="diagnosticsSection" class="diagnostics hidden">
         <details id="diagnosticsDetails">
@@ -114,6 +118,7 @@
 
     </div>
 
+    <script src="../shared/fieldlens_core.js"></script>
     <script src="panel.js"></script>
   </body>
 </html>

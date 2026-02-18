@@ -13,7 +13,8 @@
     loadingMessageTimer: null,
     loadingMessageIndex: 0,
     hideZeroGroups: false,
-    settingsLoaded: false
+    settingsLoaded: false,
+    lastFailure: null
   };
 
   const el = {
@@ -23,6 +24,9 @@
     freshnessBadge: document.getElementById('freshnessBadge'),
     closeBtn: document.getElementById('closeBtn'),
     errorBanner: document.getElementById('errorBanner'),
+    retryActions: document.getElementById('retryActions'),
+    retryLoadBtn: document.getElementById('retryLoadBtn'),
+    retryScanBtn: document.getElementById('retryScanBtn'),
     warningBanner: document.getElementById('warningBanner'),
     diagnosticsSection: document.getElementById('diagnosticsSection'),
     diagnosticsCount: document.getElementById('diagnosticsCount'),
@@ -93,6 +97,12 @@
     el.closeBtn.addEventListener('click', () => {
       notifyParent({ source: 'fieldlens-panel', type: 'CLOSE_PANEL' });
     });
+    if (el.retryLoadBtn) {
+      el.retryLoadBtn.addEventListener('click', retryLoadFields);
+    }
+    if (el.retryScanBtn) {
+      el.retryScanBtn.addEventListener('click', retryScan);
+    }
 
     el.scanBtn.addEventListener('click', runScan);
     el.modeQuickBtn.addEventListener('click', () => setScanMode('quick'));
@@ -205,6 +215,7 @@
     }
     hideFlsControls();
     hideAllNotices();
+    clearRetryState();
     hideDiagnostics();
     clearFreshness();
     resetResults();
@@ -244,12 +255,15 @@
 
       if (!state.allFields.length) {
         showError('No fields found or Tooling API access is unavailable for FieldDefinition.');
+        setRetryState('loadFields', { objectApiName });
       } else {
         hideError();
+        clearRetryState();
       }
     } catch (error) {
       console.error('[FieldLens] loadFields failed', error);
       showError(error.message || 'Failed to load fields for this object.');
+      setRetryState('loadFields', { objectApiName });
     } finally {
       hideLoading();
     }
@@ -310,6 +324,7 @@
     }
 
     hideAllNotices();
+    clearRetryState();
     resetResults();
     startScanLoading();
     setModeBadge(true);
@@ -324,6 +339,7 @@
       renderScanResult(result);
       renderFreshness(result);
       renderDiagnostics(result.warnings || []);
+      clearRetryState();
     } catch (error) {
       console.error('[FieldLens] scanImpact failed', error);
       showError(error.message || 'Impact scan failed.');
@@ -331,6 +347,7 @@
       if (el.exportCsvBtn) {
         el.exportCsvBtn.disabled = true;
       }
+      setRetryState('scanImpact', { objectApiName, fieldApiName, scanMode: state.scanMode });
       hideDiagnostics();
       clearFreshness();
     } finally {
@@ -378,7 +395,8 @@
       const rawItems =
         group.itemsOverride || (Array.isArray(result.groups?.[group.key]) ? result.groups[group.key] : []);
       const items = filterItemsBySearch(rawItems);
-      if (state.hideZeroGroups && items.length === 0) {
+      const shouldShowGroup = getCore().shouldShowGroup || ((count, hideZero) => !hideZero || count > 0);
+      if (!shouldShowGroup(items.length, state.hideZeroGroups)) {
         continue;
       }
       total += items.length;
@@ -602,6 +620,69 @@
     hideWarning();
   }
 
+  function setRetryState(action, payload) {
+    state.lastFailure = { action, payload };
+    if (!el.retryActions || !el.retryLoadBtn || !el.retryScanBtn) {
+      return;
+    }
+    el.retryActions.classList.remove('hidden');
+    el.retryLoadBtn.classList.toggle('hidden', action !== 'loadFields');
+    el.retryScanBtn.classList.toggle('hidden', action !== 'scanImpact');
+  }
+
+  function clearRetryState() {
+    state.lastFailure = null;
+    if (!el.retryActions || !el.retryLoadBtn || !el.retryScanBtn) {
+      return;
+    }
+    el.retryActions.classList.add('hidden');
+    el.retryLoadBtn.classList.add('hidden');
+    el.retryScanBtn.classList.add('hidden');
+  }
+
+  async function retryLoadFields() {
+    const payload = state.lastFailure?.action === 'loadFields' ? state.lastFailure.payload : null;
+    const objectApiName = payload?.objectApiName || state.context?.objectApiName;
+    if (!objectApiName) {
+      return;
+    }
+    hideAllNotices();
+    await loadObjectFields(objectApiName);
+  }
+
+  async function retryScan() {
+    const payload = state.lastFailure?.action === 'scanImpact' ? state.lastFailure.payload : null;
+    if (!payload?.objectApiName || !payload?.fieldApiName) {
+      return;
+    }
+    hideAllNotices();
+    clearRetryState();
+    resetResults();
+    startScanLoading();
+    setModeBadge(true);
+    try {
+      const result = await requestParent('scanImpact', payload);
+      state.lastScan = result;
+      el.copyBtn.disabled = false;
+      if (el.exportCsvBtn) {
+        el.exportCsvBtn.disabled = false;
+      }
+      renderScanResult(result);
+      renderFreshness(result);
+      renderDiagnostics(result.warnings || []);
+      clearRetryState();
+    } catch (error) {
+      showError(error.message || 'Impact scan failed.');
+      setRetryState('scanImpact', payload);
+      if (el.exportCsvBtn) {
+        el.exportCsvBtn.disabled = true;
+      }
+    } finally {
+      hideLoading();
+      setModeBadge(false);
+    }
+  }
+
   function renderFreshness(result) {
     if (!el.freshnessBadge) {
       return;
@@ -673,6 +754,7 @@
     if (el.accordionControls) {
       el.accordionControls.classList.add('hidden');
     }
+    clearRetryState();
     hideTopImpact();
     hideFlsControls();
   }
@@ -689,8 +771,15 @@
   async function loadUserSettings() {
     try {
       const settings = await requestParent('getSettings', {});
-      const defaultScanMode = settings?.defaultScanMode === 'deep' ? 'deep' : 'quick';
-      state.hideZeroGroups = !!settings?.hideZeroGroups;
+      const core = getCore();
+      const normalized = core.normalizeSettings
+        ? core.normalizeSettings(settings || {})
+        : {
+            defaultScanMode: settings?.defaultScanMode === 'deep' ? 'deep' : 'quick',
+            hideZeroGroups: !!settings?.hideZeroGroups
+          };
+      const defaultScanMode = normalized.defaultScanMode;
+      state.hideZeroGroups = !!normalized.hideZeroGroups;
       if (el.hideZeroGroupsCheckbox) {
         el.hideZeroGroupsCheckbox.checked = state.hideZeroGroups;
       }
@@ -718,27 +807,10 @@
   }
 
   function exportCsv(result) {
-    const rows = [['Group', 'Name', 'Subtitle', 'URL']];
-    const groups = [
-      ['Validation Rules', result.groups?.validationRules || []],
-      ['Apex Classes', result.groups?.apexClasses || []],
-      ['Apex Triggers', result.groups?.apexTriggers || []],
-      ['Flows', result.groups?.flows || []],
-      ['Formula Fields', result.groups?.formulaFields || []],
-      ['Page Layouts', result.groups?.pageLayouts || []],
-      ['List Views', result.groups?.listViews || []],
-      ['Report Types', result.groups?.reportTypes || []],
-      ['FLS / Permissions', result.groups?.fieldPermissions || []]
-    ];
-    for (const [groupLabel, items] of groups) {
-      for (const item of items) {
-        rows.push([groupLabel, item?.name || item?.id || '', item?.subtitle || '', item?.url || '']);
-      }
-    }
-    if (rows.length === 1) {
-      rows.push(['No Results', '', '', '']);
-    }
-    const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+    const core = getCore();
+    const rows = core.buildImpactCsvRows ? core.buildImpactCsvRows(result) : [['Group', 'Name', 'Subtitle', 'URL']];
+    const csvEscapeFn = core.csvEscape || csvEscape;
+    const csv = rows.map((row) => row.map(csvEscapeFn).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -756,6 +828,11 @@
       return `"${s.replace(/"/g, '""')}"`;
     }
     return s;
+  }
+
+  function getCore() {
+    const core = typeof globalThis !== 'undefined' ? globalThis.FieldLensCore : null;
+    return core && typeof core === 'object' ? core : {};
   }
 
   function renderTopImpact(result) {

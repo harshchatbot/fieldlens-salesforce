@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "FieldLens for Salesforce",
   "description": "Field impact and usage scanner for Salesforce Lightning fields.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -34,14 +34,18 @@
         "https://*.my.salesforce.com/lightning/*",
         "https://*.lightning.force.com/lightning/*"
       ],
-      "js": ["content.js"],
+      "js": ["shared/fieldlens_core.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
   {
-    "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js", "ui/techfi-logo.svg"],
-    "matches": ["<all_urls>"]
+    "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js", "ui/techfi-logo.svg", "shared/fieldlens_core.js"],
+    "matches": [
+      "https://*.salesforce.com/*",
+      "https://*.my.salesforce.com/*",
+      "https://*.lightning.force.com/*"
+    ]
   }
 ]
 

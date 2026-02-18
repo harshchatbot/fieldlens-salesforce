@@ -44,6 +44,10 @@
     button.textContent = 'FieldLens';
     button.setAttribute('aria-label', 'Open FieldLens panel');
     applyButtonStyles(button);
+    button.addEventListener('mouseenter', () => setLauncherButtonExpanded(true));
+    button.addEventListener('mouseleave', () => setLauncherButtonExpanded(false));
+    button.addEventListener('focus', () => setLauncherButtonExpanded(true));
+    button.addEventListener('blur', () => setLauncherButtonExpanded(false));
     button.addEventListener('click', openPanel);
 
     const shell = document.createElement('aside');
@@ -63,6 +67,7 @@
     shell.appendChild(iframe);
     document.documentElement.appendChild(button);
     document.documentElement.appendChild(shell);
+    setLauncherButtonExpanded(false);
   }
 
   function bindEscHandler() {
@@ -157,7 +162,6 @@
   }
 
   async function handleToolingQuery(urlString) {
-    console.debug('[FieldLens] Tooling query:', urlString);
     try {
       const res = await fetch(urlString, {
         method: 'GET',
@@ -248,15 +252,21 @@
 
     if (action === 'getSettings') {
       const store = await chrome.storage.local.get(['fieldlensSettings']);
-      return store.fieldlensSettings || {};
+      const core = typeof globalThis !== 'undefined' ? globalThis.FieldLensCore : null;
+      const normalize = core && typeof core.normalizeSettings === 'function' ? core.normalizeSettings : null;
+      return normalize ? normalize(store.fieldlensSettings || {}) : store.fieldlensSettings || {};
     }
 
     if (action === 'saveSettings') {
       const incoming = payload && typeof payload.settings === 'object' ? payload.settings : {};
-      const normalized = {
-        defaultScanMode: incoming.defaultScanMode === 'deep' ? 'deep' : 'quick',
-        hideZeroGroups: !!incoming.hideZeroGroups
-      };
+      const core = typeof globalThis !== 'undefined' ? globalThis.FieldLensCore : null;
+      const normalize = core && typeof core.normalizeSettings === 'function' ? core.normalizeSettings : null;
+      const normalized = normalize
+        ? normalize(incoming)
+        : {
+            defaultScanMode: incoming.defaultScanMode === 'deep' ? 'deep' : 'quick',
+            hideZeroGroups: !!incoming.hideZeroGroups
+          };
       await chrome.storage.local.set({ fieldlensSettings: normalized });
       return normalized;
     }
@@ -436,6 +446,7 @@
       return;
     }
     panelOpen = true;
+    setLauncherButtonExpanded(true);
     shell.style.transform = 'translateX(0)';
     shell.setAttribute('aria-hidden', 'false');
     postToPanel('CONTEXT_UPDATE', currentContext);
@@ -447,6 +458,7 @@
       return;
     }
     panelOpen = false;
+    setLauncherButtonExpanded(false);
     shell.style.transform = 'translateX(100%)';
     shell.setAttribute('aria-hidden', 'true');
   }
@@ -482,6 +494,14 @@
   }
 
   function parseSalesforceContext(urlString) {
+    const core = typeof globalThis !== 'undefined' ? globalThis.FieldLensCore : null;
+    if (core && typeof core.parseSalesforceContext === 'function') {
+      try {
+        return core.parseSalesforceContext(urlString);
+      } catch (_) {
+        // fall back to local parser
+      }
+    }
     const url = new URL(urlString);
     const path = url.pathname;
 
@@ -528,26 +548,40 @@
   function applyButtonStyles(button) {
     const styles = {
       position: 'fixed',
-      right: '24px',
-      bottom: '24px',
+      right: '-78px',
+      top: '46%',
       zIndex: '2147483646',
       border: '0',
-      borderRadius: '999px',
+      borderRadius: '12px 0 0 12px',
       background: '#0176d3',
       color: '#fff',
       fontSize: '14px',
       fontWeight: '600',
       fontFamily: "'Salesforce Sans', 'Segoe UI', sans-serif",
       letterSpacing: '0.2px',
-      boxShadow: '0 12px 24px rgba(1, 118, 211, 0.35)',
-      padding: '12px 18px',
+      boxShadow: '-8px 10px 24px rgba(1, 118, 211, 0.35)',
+      padding: '11px 16px',
       cursor: 'pointer',
       display: 'inline-flex',
       alignItems: 'center',
-      justifyContent: 'center'
+      justifyContent: 'center',
+      transform: 'translateY(-50%)',
+      transition: 'right 180ms ease-in-out, box-shadow 180ms ease-in-out'
     };
 
     Object.assign(button.style, styles);
+  }
+
+  function setLauncherButtonExpanded(expanded) {
+    const button = document.getElementById(FIELDLENS_BUTTON_ID);
+    if (!button) {
+      return;
+    }
+    const shouldExpand = !!expanded || panelOpen;
+    button.style.right = shouldExpand ? '0' : '-78px';
+    button.style.boxShadow = shouldExpand
+      ? '-10px 10px 26px rgba(1, 118, 211, 0.4)'
+      : '-8px 10px 24px rgba(1, 118, 211, 0.35)';
   }
 
   function applyPanelShellStyles(shell) {
@@ -555,7 +589,7 @@
       position: 'fixed',
       top: '0',
       right: '0',
-      width: '420px',
+      width: '360px',
       maxWidth: '90vw',
       height: '100vh',
       zIndex: '2147483647',
