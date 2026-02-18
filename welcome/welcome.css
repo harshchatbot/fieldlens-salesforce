@@ -1,0 +1,77 @@
+:root {
+  --bg: #eef7ff;
+  --card: #ffffff;
+  --text: #153047;
+  --muted: #536d83;
+  --brand: #0176d3;
+  --brand2: #2f9c22;
+  --border: #d2e2f0;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: "Salesforce Sans", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top right, #dff0ff 0%, var(--bg) 45%, #f7fbff 100%);
+}
+
+.wrap {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 36px 18px 48px;
+}
+
+.hero {
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, #fff 0%, #f8fcff 100%);
+  border-radius: 16px;
+  padding: 20px;
+}
+.logo { width: 88px; height: auto; display: block; }
+.kicker { margin: 8px 0 0; color: #2f8f26; font-weight: 700; font-size: 12px; }
+h1 { margin: 6px 0 8px; font-size: 32px; }
+.sub { margin: 0; color: var(--muted); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  padding: 16px;
+}
+.card h2 { margin: 0 0 10px; font-size: 18px; }
+.card ul, .card ol { margin: 0; padding-left: 20px; color: #2b4961; }
+.card li { margin: 8px 0; }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: #fff;
+  color: #16324a;
+  font-weight: 700;
+}
+
+.btn.primary {
+  border-color: #0a6ab7;
+  background: linear-gradient(180deg, var(--brand), #035fa7);
+  color: #fff;
+}

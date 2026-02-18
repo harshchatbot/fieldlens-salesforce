@@ -38,7 +38,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js"],
+      "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js", "ui/techfi-logo.svg"],
       "matches": [
         "*://*.salesforce.com/*",
         "*://*.force.com/*"

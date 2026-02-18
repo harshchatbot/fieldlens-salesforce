@@ -21,6 +21,10 @@ FieldLens is a Chrome Extension (Manifest V3) for Salesforce Lightning Experienc
 4. Select folder: `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce`.
 5. Pin **FieldLens for Salesforce** from the extensions toolbar (optional).
 
+On first install, a welcome page opens automatically:
+
+- `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/welcome/welcome.html`
+
 ## Salesforce Sandbox Testing
 
 1. Log into your Salesforce sandbox in Lightning Experience.

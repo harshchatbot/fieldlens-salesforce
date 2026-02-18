@@ -4,6 +4,13 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const inFlightScans = new Map();
 const inFlightFieldLoads = new Map();
 
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    const welcomeUrl = chrome.runtime.getURL('welcome/welcome.html');
+    chrome.tabs.create({ url: welcomeUrl });
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') {
     return false;
