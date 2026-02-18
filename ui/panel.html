@@ -16,6 +16,7 @@
             <p class="brand-subtitle">by TechFi Labs</p>
             <p id="modeBadge" class="mode-badge">Mode: Quick</p>
             <p id="contextLine" class="context-line">Waiting for Salesforce page context...</p>
+            <p id="freshnessBadge" class="freshness-badge hidden"></p>
           </div>
         </button>
         <button id="closeBtn" class="icon-btn" type="button" aria-label="Close panel">×</button>
@@ -23,6 +24,12 @@
 
       <section id="errorBanner" class="error-banner hidden"></section>
       <section id="warningBanner" class="warning-banner hidden"></section>
+      <section id="diagnosticsSection" class="diagnostics hidden">
+        <details id="diagnosticsDetails">
+          <summary>Diagnostics <span id="diagnosticsCount" class="diagnostics-count">0</span></summary>
+          <ul id="diagnosticsList" class="diagnostics-list"></ul>
+        </details>
+      </section>
 
       <section id="recordFieldPicker" class="field-picker hidden">
         <label for="fieldSearchInput">Select field</label>
@@ -42,9 +49,30 @@
         <button id="scanBtn" class="primary-btn" type="button">Run Impact Scan</button>
         <button id="copyBtn" class="secondary-btn" type="button" disabled>Copy Summary</button>
       </section>
+      <section class="actions">
+        <button id="exportCsvBtn" class="secondary-btn" type="button" disabled>Export CSV</button>
+        <button id="settingsBtn" class="secondary-btn" type="button">Settings</button>
+      </section>
+      <section id="settingsPanel" class="settings-panel hidden">
+        <label class="settings-row">
+          <span>Default scan mode</span>
+          <select id="defaultScanModeSelect">
+            <option value="quick">Quick</option>
+            <option value="deep">Deep</option>
+          </select>
+        </label>
+        <label class="settings-row settings-checkbox">
+          <input id="hideZeroGroupsCheckbox" type="checkbox" />
+          <span>Hide zero-result sections</span>
+        </label>
+      </section>
 
       <section id="resultSearchWrap" class="result-search hidden">
         <input id="resultSearchInput" type="text" placeholder="Filter results across all groups" autocomplete="off" />
+      </section>
+      <section id="accordionControls" class="accordion-controls hidden">
+        <button id="expandAllBtn" class="secondary-btn accordion-btn" type="button">Expand all</button>
+        <button id="collapseAllBtn" class="secondary-btn accordion-btn" type="button">Collapse all</button>
       </section>
 
       <section id="loadingState" class="loading hidden" aria-live="polite">

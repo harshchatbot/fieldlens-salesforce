@@ -11,25 +11,39 @@
     scanMode: 'quick',
     flsFilter: 'all',
     loadingMessageTimer: null,
-    loadingMessageIndex: 0
+    loadingMessageIndex: 0,
+    hideZeroGroups: false,
+    settingsLoaded: false
   };
 
   const el = {
     brandLinkBtn: document.getElementById('brandLinkBtn'),
     modeBadge: document.getElementById('modeBadge'),
     contextLine: document.getElementById('contextLine'),
+    freshnessBadge: document.getElementById('freshnessBadge'),
     closeBtn: document.getElementById('closeBtn'),
     errorBanner: document.getElementById('errorBanner'),
     warningBanner: document.getElementById('warningBanner'),
+    diagnosticsSection: document.getElementById('diagnosticsSection'),
+    diagnosticsCount: document.getElementById('diagnosticsCount'),
+    diagnosticsList: document.getElementById('diagnosticsList'),
     recordFieldPicker: document.getElementById('recordFieldPicker'),
     fieldSearchInput: document.getElementById('fieldSearchInput'),
     fieldSelect: document.getElementById('fieldSelect'),
     scanBtn: document.getElementById('scanBtn'),
     copyBtn: document.getElementById('copyBtn'),
+    exportCsvBtn: document.getElementById('exportCsvBtn'),
+    settingsBtn: document.getElementById('settingsBtn'),
+    settingsPanel: document.getElementById('settingsPanel'),
+    defaultScanModeSelect: document.getElementById('defaultScanModeSelect'),
+    hideZeroGroupsCheckbox: document.getElementById('hideZeroGroupsCheckbox'),
     modeQuickBtn: document.getElementById('modeQuickBtn'),
     modeDeepBtn: document.getElementById('modeDeepBtn'),
     resultSearchWrap: document.getElementById('resultSearchWrap'),
     resultSearchInput: document.getElementById('resultSearchInput'),
+    accordionControls: document.getElementById('accordionControls'),
+    expandAllBtn: document.getElementById('expandAllBtn'),
+    collapseAllBtn: document.getElementById('collapseAllBtn'),
     loadingState: document.getElementById('loadingState'),
     loadingTextValue: document.getElementById('loadingTextValue'),
     emptyState: document.getElementById('emptyState'),
@@ -45,9 +59,10 @@
   let requestIdCounter = 0;
 
   setupEvents();
-  setScanMode('quick');
+  setScanMode('quick', false);
   syncFlsFilterButtons();
   setModeBadge(false);
+  loadUserSettings();
   notifyParent({ source: 'fieldlens-panel', type: 'PANEL_READY' });
 
   window.addEventListener('message', (event) => {
@@ -96,6 +111,35 @@
         showError('Could not copy summary on this page due to browser policy.');
       }
     });
+    if (el.exportCsvBtn) {
+      el.exportCsvBtn.addEventListener('click', () => {
+        if (!state.lastScan) {
+          return;
+        }
+        exportCsv(state.lastScan);
+      });
+    }
+    if (el.settingsBtn && el.settingsPanel) {
+      el.settingsBtn.addEventListener('click', () => {
+        el.settingsPanel.classList.toggle('hidden');
+      });
+    }
+    if (el.defaultScanModeSelect) {
+      el.defaultScanModeSelect.addEventListener('change', async () => {
+        const next = el.defaultScanModeSelect.value === 'deep' ? 'deep' : 'quick';
+        setScanMode(next, false);
+        await persistUserSettings();
+      });
+    }
+    if (el.hideZeroGroupsCheckbox) {
+      el.hideZeroGroupsCheckbox.addEventListener('change', async () => {
+        state.hideZeroGroups = !!el.hideZeroGroupsCheckbox.checked;
+        await persistUserSettings();
+        if (state.lastScan) {
+          renderScanResult(state.lastScan);
+        }
+      });
+    }
 
     el.resultSearchInput.addEventListener('input', () => {
       clearTimeout(state.resultSearchDebounceTimer);
@@ -106,6 +150,12 @@
         }
       }, 180);
     });
+    if (el.expandAllBtn) {
+      el.expandAllBtn.addEventListener('click', () => setAllAccordions(true));
+    }
+    if (el.collapseAllBtn) {
+      el.collapseAllBtn.addEventListener('click', () => setAllAccordions(false));
+    }
 
     el.fieldSearchInput.addEventListener('input', () => {
       clearTimeout(state.searchDebounceTimer);
@@ -150,8 +200,13 @@
     state.context = context;
     state.lastScan = null;
     el.copyBtn.disabled = true;
+    if (el.exportCsvBtn) {
+      el.exportCsvBtn.disabled = true;
+    }
     hideFlsControls();
     hideAllNotices();
+    hideDiagnostics();
+    clearFreshness();
     resetResults();
     setModeBadge(false);
 
@@ -263,15 +318,21 @@
       const result = await requestParent('scanImpact', { objectApiName, fieldApiName, scanMode: state.scanMode });
       state.lastScan = result;
       el.copyBtn.disabled = false;
-      renderScanResult(result);
-
-      if (Array.isArray(result.warnings) && result.warnings.length) {
-        showWarning(result.warnings.join(' | '));
+      if (el.exportCsvBtn) {
+        el.exportCsvBtn.disabled = false;
       }
+      renderScanResult(result);
+      renderFreshness(result);
+      renderDiagnostics(result.warnings || []);
     } catch (error) {
       console.error('[FieldLens] scanImpact failed', error);
       showError(error.message || 'Impact scan failed.');
       el.copyBtn.disabled = true;
+      if (el.exportCsvBtn) {
+        el.exportCsvBtn.disabled = true;
+      }
+      hideDiagnostics();
+      clearFreshness();
     } finally {
       hideLoading();
       setModeBadge(false);
@@ -281,6 +342,9 @@
   function renderScanResult(result) {
     if (el.resultSearchWrap) {
       el.resultSearchWrap.classList.remove('hidden');
+    }
+    if (el.accordionControls) {
+      el.accordionControls.classList.remove('hidden');
     }
 
     renderTopImpact(result);
@@ -314,18 +378,24 @@
       const rawItems =
         group.itemsOverride || (Array.isArray(result.groups?.[group.key]) ? result.groups[group.key] : []);
       const items = filterItemsBySearch(rawItems);
+      if (state.hideZeroGroups && items.length === 0) {
+        continue;
+      }
       total += items.length;
 
-      const card = document.createElement('article');
-      card.className = 'result-group';
+      const card = document.createElement('details');
+      card.className = 'result-group result-accordion';
+      if (items.length > 0) {
+        card.open = true;
+      }
 
-      const head = document.createElement('header');
+      const head = document.createElement('summary');
       head.className = 'result-group-header';
       const countLabel =
         typeof group.totalCount === 'number'
           ? `${items.length}/${group.totalCount}`
           : `${items.length}`;
-      head.innerHTML = `<span>${group.label}</span><span>${countLabel}</span>`;
+      head.innerHTML = `<span>${group.label} (${countLabel})</span>`;
       card.appendChild(head);
 
       const list = document.createElement('ul');
@@ -351,7 +421,10 @@
         }
       }
 
-      card.appendChild(list);
+      const body = document.createElement('div');
+      body.className = 'result-group-body';
+      body.appendChild(list);
+      card.appendChild(body);
       el.resultsContainer.appendChild(card);
     }
 
@@ -432,6 +505,12 @@
   function requestParent(action, payload) {
     const requestId = ++requestIdCounter;
     notifyParent({ source: 'fieldlens-panel', type: 'REQUEST', action, payload, requestId });
+    const timeoutMs =
+      action === 'scanImpact' && payload?.scanMode === 'deep'
+        ? 180000
+        : action === 'scanImpact'
+          ? 90000
+          : 60000;
 
     return new Promise((resolve, reject) => {
       pendingRequestMap.set(requestId, { resolve, reject });
@@ -441,7 +520,7 @@
           pendingRequestMap.delete(requestId);
           reject({ code: 'TIMEOUT', message: 'Request timed out while waiting for extension response.' });
         }
-      }, 45000);
+      }, timeoutMs);
     });
   }
 
@@ -523,6 +602,67 @@
     hideWarning();
   }
 
+  function renderFreshness(result) {
+    if (!el.freshnessBadge) {
+      return;
+    }
+    const generatedAt = Number(result?.generatedAt || 0);
+    const fromCache = !!result?.fromCache;
+    if (!generatedAt) {
+      el.freshnessBadge.textContent = fromCache ? 'Cached' : 'Live';
+      el.freshnessBadge.classList.toggle('cached', fromCache);
+      el.freshnessBadge.classList.remove('hidden');
+      return;
+    }
+
+    if (!fromCache) {
+      el.freshnessBadge.textContent = 'Live';
+      el.freshnessBadge.classList.remove('cached');
+      el.freshnessBadge.classList.remove('hidden');
+      return;
+    }
+
+    const ageMs = Math.max(0, Date.now() - generatedAt);
+    const ageMin = Math.max(1, Math.round(ageMs / 60000));
+    el.freshnessBadge.textContent = `Cached ${ageMin}m ago`;
+    el.freshnessBadge.classList.add('cached');
+    el.freshnessBadge.classList.remove('hidden');
+  }
+
+  function clearFreshness() {
+    if (!el.freshnessBadge) {
+      return;
+    }
+    el.freshnessBadge.textContent = '';
+    el.freshnessBadge.classList.add('hidden');
+    el.freshnessBadge.classList.remove('cached');
+  }
+
+  function renderDiagnostics(warnings) {
+    const filtered = Array.isArray(warnings)
+      ? warnings
+          .map((x) => String(x || '').trim())
+          .filter(Boolean)
+      : [];
+    if (!filtered.length || !el.diagnosticsSection || !el.diagnosticsList || !el.diagnosticsCount) {
+      hideDiagnostics();
+      return;
+    }
+
+    el.diagnosticsCount.textContent = String(filtered.length);
+    el.diagnosticsList.innerHTML = filtered.map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+    el.diagnosticsSection.classList.remove('hidden');
+  }
+
+  function hideDiagnostics() {
+    if (!el.diagnosticsSection || !el.diagnosticsList || !el.diagnosticsCount) {
+      return;
+    }
+    el.diagnosticsCount.textContent = '0';
+    el.diagnosticsList.innerHTML = '';
+    el.diagnosticsSection.classList.add('hidden');
+  }
+
   function resetResults() {
     el.resultsContainer.classList.add('hidden');
     el.resultsContainer.innerHTML = '';
@@ -530,8 +670,92 @@
     if (el.resultSearchWrap) {
       el.resultSearchWrap.classList.add('hidden');
     }
+    if (el.accordionControls) {
+      el.accordionControls.classList.add('hidden');
+    }
     hideTopImpact();
     hideFlsControls();
+  }
+
+  function setAllAccordions(open) {
+    if (!el.resultsContainer) {
+      return;
+    }
+    el.resultsContainer.querySelectorAll('.result-accordion').forEach((node) => {
+      node.open = !!open;
+    });
+  }
+
+  async function loadUserSettings() {
+    try {
+      const settings = await requestParent('getSettings', {});
+      const defaultScanMode = settings?.defaultScanMode === 'deep' ? 'deep' : 'quick';
+      state.hideZeroGroups = !!settings?.hideZeroGroups;
+      if (el.hideZeroGroupsCheckbox) {
+        el.hideZeroGroupsCheckbox.checked = state.hideZeroGroups;
+      }
+      setScanMode(defaultScanMode, false);
+      state.settingsLoaded = true;
+    } catch (_) {
+      state.settingsLoaded = true;
+    }
+  }
+
+  async function persistUserSettings() {
+    if (!state.settingsLoaded) {
+      return;
+    }
+    try {
+      await requestParent('saveSettings', {
+        settings: {
+          defaultScanMode: state.scanMode,
+          hideZeroGroups: !!state.hideZeroGroups
+        }
+      });
+    } catch (_) {
+      // settings are non-critical
+    }
+  }
+
+  function exportCsv(result) {
+    const rows = [['Group', 'Name', 'Subtitle', 'URL']];
+    const groups = [
+      ['Validation Rules', result.groups?.validationRules || []],
+      ['Apex Classes', result.groups?.apexClasses || []],
+      ['Apex Triggers', result.groups?.apexTriggers || []],
+      ['Flows', result.groups?.flows || []],
+      ['Formula Fields', result.groups?.formulaFields || []],
+      ['Page Layouts', result.groups?.pageLayouts || []],
+      ['List Views', result.groups?.listViews || []],
+      ['Report Types', result.groups?.reportTypes || []],
+      ['FLS / Permissions', result.groups?.fieldPermissions || []]
+    ];
+    for (const [groupLabel, items] of groups) {
+      for (const item of items) {
+        rows.push([groupLabel, item?.name || item?.id || '', item?.subtitle || '', item?.url || '']);
+      }
+    }
+    if (rows.length === 1) {
+      rows.push(['No Results', '', '', '']);
+    }
+    const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fieldlens_${result.objectApiName}_${result.fieldApiName}_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function csvEscape(value) {
+    const s = String(value ?? '');
+    if (/[",\n]/.test(s)) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
   }
 
   function renderTopImpact(result) {
@@ -634,13 +858,19 @@
     return haystack.includes(state.resultSearchTerm);
   }
 
-  function setScanMode(mode) {
+  function setScanMode(mode, persist = true) {
     state.scanMode = mode === 'deep' ? 'deep' : 'quick';
     el.modeQuickBtn.classList.toggle('mode-btn-active', state.scanMode === 'quick');
     el.modeDeepBtn.classList.toggle('mode-btn-active', state.scanMode === 'deep');
     el.modeQuickBtn.setAttribute('aria-pressed', state.scanMode === 'quick' ? 'true' : 'false');
     el.modeDeepBtn.setAttribute('aria-pressed', state.scanMode === 'deep' ? 'true' : 'false');
+    if (el.defaultScanModeSelect) {
+      el.defaultScanModeSelect.value = state.scanMode;
+    }
     setModeBadge(false);
+    if (persist) {
+      persistUserSettings();
+    }
   }
 
   function setModeBadge(isRunning) {

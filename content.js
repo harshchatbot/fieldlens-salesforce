@@ -246,6 +246,21 @@
       return { copied: true };
     }
 
+    if (action === 'getSettings') {
+      const store = await chrome.storage.local.get(['fieldlensSettings']);
+      return store.fieldlensSettings || {};
+    }
+
+    if (action === 'saveSettings') {
+      const incoming = payload && typeof payload.settings === 'object' ? payload.settings : {};
+      const normalized = {
+        defaultScanMode: incoming.defaultScanMode === 'deep' ? 'deep' : 'quick',
+        hideZeroGroups: !!incoming.hideZeroGroups
+      };
+      await chrome.storage.local.set({ fieldlensSettings: normalized });
+      return normalized;
+    }
+
     throw createError('UNKNOWN_ACTION', `Unknown panel action: ${action}`);
   }
 
