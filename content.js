@@ -2,14 +2,20 @@
   const FIELDLENS_BUTTON_ID = 'fieldlens-floating-button';
   const FIELDLENS_PANEL_ID = 'fieldlens-panel-shell';
   const IFRAME_ID = 'fieldlens-panel-frame';
+  const PAGE_PROXY_REQUEST_TYPE = 'FIELDLENS_PAGE_PROXY_REQUEST';
+  const PAGE_PROXY_RESPONSE_TYPE = 'FIELDLENS_PAGE_PROXY_RESPONSE';
 
   let currentUrl = location.href;
   let currentContext = parseSalesforceContext(currentUrl);
   let panelReady = false;
   let panelOpen = false;
   let messageCounter = 0;
+  const extensionOrigin = resolveExtensionOrigin();
+  let pageBridgeInjected = false;
+  let pageProxyRequestId = 0;
 
   const pendingRequests = new Map();
+  const pendingPageProxyRequests = new Map();
 
   init();
 
@@ -23,6 +29,7 @@
     watchUrlChanges();
     bindEscHandler();
     bindWindowMessageHandler();
+    bindPageProxyResponseHandler();
     bindRuntimeProxyHandler();
   }
 
@@ -68,8 +75,11 @@
 
   function bindWindowMessageHandler() {
     window.addEventListener('message', async (event) => {
-      const expectedOrigin = `chrome-extension://${chrome.runtime.id}`;
-      if (event.origin !== expectedOrigin) {
+      const panelFrame = document.getElementById(IFRAME_ID);
+      if (panelFrame?.contentWindow && event.source !== panelFrame.contentWindow) {
+        return;
+      }
+      if (extensionOrigin && event.origin !== extensionOrigin) {
         return;
       }
 
@@ -119,135 +129,82 @@
 
   function bindRuntimeProxyHandler() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (!message || message.type !== 'FIELDLENS_FETCH_JSON' || typeof message.url !== 'string') {
+      if (!message || message.type !== 'FIELDLENS_TOOLING_QUERY' || typeof message.url !== 'string') {
         return false;
       }
 
-      proxyFetchJson(message.url)
-        .then((result) => sendResponse({ ok: true, status: result.status, data: result.data }))
-        .catch((error) =>
-          sendResponse({
-            ok: false,
-            status: error.status || 0,
-            error: {
-              code: error.code || 'PROXY_FETCH_FAILED',
-              message: error.message || 'Failed to fetch Salesforce API in tab context.'
-            }
-          })
-        );
+      handleToolingQuery(message.url).then(sendResponse);
       return true;
     });
   }
 
-  async function proxyFetchJson(urlString) {
-    const target = new URL(urlString);
-    const current = new URL(location.href);
-    if (!isTrustedSalesforcePair(current.hostname, target.hostname)) {
-      throw createError(
-        'INVALID_ORIGIN',
-        `Proxy fetch blocked due to untrusted origin pair. current=${current.origin} target=${target.origin}`
-      );
-    }
-
-    try {
-      return await proxyViaFetch(target.toString());
-    } catch (fetchError) {
-      // Some org/browser combinations fail with fetch() in extension isolated world.
-      try {
-        return await proxyViaXhr(target.toString());
-      } catch (xhrError) {
-        const detail = [
-          `fetch=${fetchError?.message || 'unknown'}`,
-          `xhr=${xhrError?.message || 'unknown'}`,
-          `url=${target.toString()}`
-        ].join(' | ');
-        throw createError('PROXY_FETCH_FAILED', detail);
+  function bindPageProxyResponseHandler() {
+    window.addEventListener('message', (event) => {
+      if (event.source !== window) {
+        return;
       }
-    }
-  }
-
-  function isTrustedSalesforcePair(currentHost, targetHost) {
-    const isSfHost = (host) =>
-      host.endsWith('.salesforce.com') || host.endsWith('.force.com');
-    if (!isSfHost(currentHost) || !isSfHost(targetHost)) {
-      return false;
-    }
-
-    // Allow same host or expected Lightning<->MyDomain host switch.
-    if (currentHost === targetHost) {
-      return true;
-    }
-
-    const currentCore = normalizeSalesforceCore(currentHost);
-    const targetCore = normalizeSalesforceCore(targetHost);
-    return currentCore && targetCore && currentCore === targetCore;
-  }
-
-  function normalizeSalesforceCore(host) {
-    return host
-      .replace('.lightning.force.com', '')
-      .replace('.my.salesforce.com', '')
-      .replace('.force.com', '')
-      .replace('.salesforce.com', '');
-  }
-
-  async function proxyViaFetch(url) {
-    const response = await fetch(url, {
-      method: 'GET',
-      credentials: 'include',
-      mode: 'same-origin',
-      headers: { Accept: 'application/json' }
-    });
-    return parseJsonResponse(response, 'fetch');
-  }
-
-  function proxyViaXhr(url) {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('GET', url, true);
-      xhr.withCredentials = true;
-      xhr.setRequestHeader('Accept', 'application/json');
-      xhr.onreadystatechange = () => {
-        if (xhr.readyState !== 4) {
-          return;
-        }
-        const status = xhr.status || 0;
-        const contentType = xhr.getResponseHeader('content-type') || '';
-        const text = xhr.responseText || '';
-        if (!contentType.includes('application/json')) {
-          reject(createError('NOT_LOGGED_IN', `XHR non-JSON response status=${status} contentType=${contentType || 'unknown'}`));
-          return;
-        }
-        try {
-          const data = JSON.parse(text);
-          resolve({ status, data });
-        } catch (_) {
-          resolve({ status, data: [] });
-        }
-      };
-      xhr.onerror = () => reject(createError('XHR_NETWORK_ERROR', `XHR network error for ${url}`));
-      xhr.send();
+      const data = event.data;
+      if (!data || data.type !== PAGE_PROXY_RESPONSE_TYPE || typeof data.requestId !== 'number') {
+        return;
+      }
+      const pending = pendingPageProxyRequests.get(data.requestId);
+      if (!pending) {
+        return;
+      }
+      pendingPageProxyRequests.delete(data.requestId);
+      pending.resolve(data.payload || { ok: false, status: 0, error: 'Empty page proxy payload' });
     });
   }
 
-  async function parseJsonResponse(response, transport) {
-    const contentType = response.headers.get('content-type') || '';
-    const raw = await response.text();
-    if (!contentType.includes('application/json')) {
-      throw createError(
-        'NOT_LOGGED_IN',
-        `${transport} non-JSON response status=${response.status} contentType=${contentType || 'unknown'}`
-      );
-    }
-
-    let data = [];
+  async function handleToolingQuery(urlString) {
+    console.debug('[FieldLens] Tooling query:', urlString);
     try {
-      data = JSON.parse(raw);
+      const res = await fetch(urlString, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { Accept: 'application/json' }
+      });
+      return parseToolingResponse(res);
+    } catch (error) {
+      const fallback = await proxyViaPageContext(urlString).catch((pageError) => ({
+        ok: false,
+        status: 0,
+        error: `Failed to fetch (content=${error?.message || 'unknown'}; page=${pageError?.message || 'unknown'})`
+      }));
+      return fallback;
+    }
+  }
+
+  async function parseToolingResponse(res) {
+    const text = await res.text();
+    const contentType = res.headers.get('content-type') || '';
+    let parsedJson = null;
+    try {
+      parsedJson = JSON.parse(text);
     } catch (_) {
-      data = [];
+      parsedJson = null;
     }
 
-    return { status: response.status, data };
+    if (parsedJson !== null) {
+      if (res.ok) {
+        return { ok: true, status: res.status, data: parsedJson };
+      }
+      return {
+        ok: false,
+        status: res.status,
+        statusText: res.statusText,
+        body: parsedJson,
+        contentType
+      };
+    }
+
+    return {
+      ok: false,
+      status: res.status,
+      statusText: res.statusText,
+      body: text,
+      contentType
+    };
   }
 
   async function routePanelRequest(action, payload) {
@@ -290,6 +247,101 @@
     }
 
     throw createError('UNKNOWN_ACTION', `Unknown panel action: ${action}`);
+  }
+
+  async function proxyViaPageContext(urlString) {
+    ensurePageFetchBridgeInjected();
+    const requestId = ++pageProxyRequestId;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pendingPageProxyRequests.delete(requestId);
+        reject(new Error('Page fetch bridge timed out'));
+      }, 20000);
+
+      pendingPageProxyRequests.set(requestId, {
+        resolve: (payload) => {
+          clearTimeout(timeout);
+          resolve(payload);
+        }
+      });
+
+      window.postMessage(
+        {
+          type: PAGE_PROXY_REQUEST_TYPE,
+          requestId,
+          url: urlString
+        },
+        window.location.origin
+      );
+    });
+  }
+
+  function ensurePageFetchBridgeInjected() {
+    if (pageBridgeInjected) {
+      return;
+    }
+    const script = document.createElement('script');
+    script.type = 'text/javascript';
+    script.textContent = `
+      (() => {
+        if (window.__fieldlensPageProxyInstalled) {
+          return;
+        }
+        window.__fieldlensPageProxyInstalled = true;
+        const REQUEST_TYPE = '${PAGE_PROXY_REQUEST_TYPE}';
+        const RESPONSE_TYPE = '${PAGE_PROXY_RESPONSE_TYPE}';
+        window.addEventListener('message', async (event) => {
+          if (event.source !== window) {
+            return;
+          }
+          const data = event.data;
+          if (!data || data.type !== REQUEST_TYPE || typeof data.requestId !== 'number' || typeof data.url !== 'string') {
+            return;
+          }
+          try {
+            const target = new URL(data.url, window.location.origin);
+            const isSameOrigin = target.origin === window.location.origin;
+            if (!isSameOrigin) {
+              throw new Error('Cross-origin page proxy blocked');
+            }
+            const res = await fetch(target.toString(), {
+              method: 'GET',
+              credentials: 'include',
+              headers: { Accept: 'application/json' }
+            });
+            const text = await res.text();
+            const contentType = res.headers.get('content-type') || '';
+            let parsed = null;
+            try {
+              parsed = JSON.parse(text);
+            } catch (_) {
+              parsed = null;
+            }
+            let payload;
+            if (parsed !== null) {
+              payload = res.ok
+                ? { ok: true, status: res.status, data: parsed }
+                : { ok: false, status: res.status, statusText: res.statusText, body: parsed, contentType };
+            } else {
+              payload = { ok: false, status: res.status, statusText: res.statusText, body: text, contentType };
+            }
+            window.postMessage({ type: RESPONSE_TYPE, requestId: data.requestId, payload }, window.location.origin);
+          } catch (error) {
+            window.postMessage(
+              {
+                type: RESPONSE_TYPE,
+                requestId: data.requestId,
+                payload: { ok: false, status: 0, error: error && error.message ? error.message : 'Page proxy fetch failed' }
+              },
+              window.location.origin
+            );
+          }
+        });
+      })();
+    `;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+    pageBridgeInjected = true;
   }
 
   function copyTextInTopDocument(text) {
@@ -359,7 +411,7 @@
         payload,
         messageId: ++messageCounter
       },
-      `chrome-extension://${chrome.runtime.id}`
+      extensionOrigin || '*'
     );
   }
 
@@ -451,6 +503,11 @@
 
   function isSalesforceHost(host) {
     return host.endsWith('.salesforce.com') || host.endsWith('.force.com');
+  }
+
+  function resolveExtensionOrigin() {
+    const runtimeId = typeof chrome !== 'undefined' && chrome.runtime ? chrome.runtime.id : null;
+    return runtimeId ? `chrome-extension://${runtimeId}` : null;
   }
 
   function applyButtonStyles(button) {

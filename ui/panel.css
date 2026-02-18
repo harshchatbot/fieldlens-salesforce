@@ -147,6 +147,45 @@ body {
   border: 1px solid #ffd48a;
 }
 
+.debug-panel {
+  border: 1px solid #d9e6f2;
+  border-radius: 10px;
+  background: #f7fbff;
+}
+
+.debug-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  border-bottom: 1px solid #e3edf7;
+  font-size: 11px;
+  font-weight: 700;
+  color: #26435d;
+}
+
+.debug-clear-btn {
+  border: 1px solid #c7d5e3;
+  border-radius: 7px;
+  padding: 2px 8px;
+  background: #fff;
+  font-size: 11px;
+  color: #26435d;
+  cursor: pointer;
+}
+
+.debug-console {
+  margin: 0;
+  padding: 8px 9px;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #16325c;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .field-picker {
   background: var(--surface);
   border: 1px solid var(--border);

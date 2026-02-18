@@ -1,13 +1,13 @@
 const API_VERSION = 'v60.0';
 const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_SCHEMA_VERSION = 'v6';
 
 const inFlightScans = new Map();
 const inFlightFieldLoads = new Map();
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
-    const welcomeUrl = chrome.runtime.getURL('welcome/welcome.html');
-    chrome.tabs.create({ url: welcomeUrl });
+    chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
   }
 });
 
@@ -30,6 +30,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'FIELDLENS_TOOLING_QUERY' && typeof message.url === 'string') {
+    forwardToolingQueryToTab(message.url)
+      .then((response) => sendResponse(response))
+      .catch((error) => sendResponse({ ok: false, error: error.message || 'Failed to forward tooling query.' }));
+    return true;
+  }
+
   return false;
 });
 
@@ -41,7 +48,7 @@ async function handleScanImpact(message, tabId) {
     throw createError('INVALID_INPUT', 'Missing object or field context for scan.');
   }
 
-  const scanKey = `scan:${new URL(baseUrl).hostname}:${objectApiName}:${fieldApiName}:${scanMode}`;
+  const scanKey = `scan:${CACHE_SCHEMA_VERSION}:${new URL(baseUrl).hostname}:${objectApiName}:${fieldApiName}:${scanMode}`;
   // Cache by org host + object + field for 10 minutes.
   const cached = await getCached(scanKey);
   if (cached) {
@@ -241,7 +248,7 @@ async function handleLoadFields(message, tabId) {
     throw createError('INVALID_INPUT', 'Missing object context for field list loading.');
   }
 
-  const fieldKey = `fields:${new URL(baseUrl).hostname}:${objectApiName}`;
+  const fieldKey = `fields:${CACHE_SCHEMA_VERSION}:${new URL(baseUrl).hostname}:${objectApiName}`;
   const cached = await getCached(fieldKey);
   if (cached) {
     return { ...cached, fromCache: true };
@@ -357,7 +364,6 @@ async function runFlowBestEffortQuery(baseUrl, escapedField, tabId) {
 async function runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
   const escapedObject = escapeSoqlValue(objectApiName);
   const escapedFullField = escapeSoqlLike(fullFieldName);
-  const escapedField = escapeSoqlLike(fieldApiName);
 
   const candidates = [
     `SELECT Id, DeveloperName, TableEnumOrId, Metadata FROM CustomField WHERE Metadata LIKE '%${escapedFullField}%' ORDER BY TableEnumOrId, DeveloperName`,
@@ -376,36 +382,301 @@ async function runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiNa
     }
   }
 
-  if (lastError) {
+  // Fallback: Describe API is often more reliable for calculatedFormula text.
+  let describeError = null;
+  try {
+    const describeMatches = await runFormulaDescribeFallback(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId);
+    // Describe fallback executed successfully (match or no match), so do not report unavailable.
+    return describeMatches;
+  } catch (error) {
+    describeError = error;
+  }
+
+  if (lastError || describeError) {
     throw createError('FORMULA_SCAN_UNAVAILABLE', 'Formula field scan is unavailable in this org/API shape.');
   }
   return [];
 }
 
+async function runFormulaDescribeFallback(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const describe = await runSObjectDescribe(baseUrl, objectApiName, tabId);
+  const fields = Array.isArray(describe?.fields) ? describe.fields : [];
+
+  return fields
+    .filter((field) => {
+      const formulaText = String(field?.calculatedFormula || '');
+      const isCalculated = !!field?.calculated || formulaText.length > 0;
+      return isCalculated && containsFieldReferenceText(formulaText, fieldApiName, fullFieldName);
+    })
+    .map((field) => ({
+      Id: field.name || `${objectApiName}.${field.label || 'Formula'}`,
+      DeveloperName: field.name || field.label || 'UnknownFormula',
+      TableEnumOrId: objectApiName,
+      Metadata: { formula: field.calculatedFormula || '' }
+    }));
+}
+
+async function runSObjectDescribe(baseUrl, objectApiName, tabId) {
+  const describePath = `/services/data/${API_VERSION}/sobjects/${encodeURIComponent(objectApiName)}/describe`;
+  const candidates = buildApiBaseCandidates(baseUrl);
+  const candidateErrors = [];
+
+  for (const candidate of candidates) {
+    const url = `${candidate}${describePath}`;
+    try {
+      const result = await fetchSalesforceJson(candidate, url, tabId);
+      if (result.status < 200 || result.status >= 300) {
+        throw createError('API_ERROR', `Describe API failed with status ${result.status}.`);
+      }
+      if (!result.data || typeof result.data !== 'object') {
+        throw createError('API_ERROR', 'Describe API returned unexpected response.');
+      }
+      return result.data;
+    } catch (error) {
+      candidateErrors.push({
+        candidate,
+        code: error.code || 'UNKNOWN_ERROR',
+        message: error.message || 'Unknown error',
+        debug: error.debug || null
+      });
+      if (isPermissionError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const first = candidateErrors[0];
+  throw createError(first?.code || 'API_ERROR', first?.message || 'Unable to run describe for formula scan.', {
+    candidates: candidateErrors
+  });
+}
+
 async function runPageLayoutBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
   const escapedObject = escapeSoqlValue(objectApiName);
-  const soql = `SELECT Id, Name, TableEnumOrId, Metadata FROM Layout WHERE TableEnumOrId = '${escapedObject}' ORDER BY Name`;
+  const byId = new Map();
+  let hadSuccessfulAttempt = false;
+  let lastError = null;
+
+  const withMetadataSoql = `SELECT Id, Name, TableEnumOrId, Metadata FROM Layout WHERE TableEnumOrId = '${escapedObject}' ORDER BY Name`;
   try {
-    const records = await runToolingQuery(baseUrl, soql, tabId);
-    return records.filter((item) =>
-      containsFieldReferenceText(JSON.stringify(item?.Metadata || {}), fieldApiName, fullFieldName)
-    );
-  } catch (_) {
+    const records = await runToolingQuery(baseUrl, withMetadataSoql, tabId);
+    hadSuccessfulAttempt = true;
+    for (const item of records) {
+      if (!containsFieldReferenceText(JSON.stringify(item?.Metadata || {}), fieldApiName, fullFieldName)) {
+        continue;
+      }
+      byId.set(item.Id, item);
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  const basicSoql = `SELECT Id, Name, TableEnumOrId FROM Layout WHERE TableEnumOrId = '${escapedObject}' ORDER BY Name`;
+  try {
+    const layouts = await runToolingQuery(baseUrl, basicSoql, tabId);
+    hadSuccessfulAttempt = true;
+    const capped = layouts.slice(0, 80);
+    for (const item of capped) {
+      const layoutId = item?.Id;
+      if (!layoutId || byId.has(layoutId)) {
+        continue;
+      }
+      try {
+        const detail = await runSingleJsonGet(
+          baseUrl,
+          `/services/data/${API_VERSION}/tooling/sobjects/Layout/${encodeURIComponent(layoutId)}`,
+          tabId
+        );
+        if (!containsFieldReferenceText(JSON.stringify(detail?.Metadata || detail || {}), fieldApiName, fullFieldName)) {
+          continue;
+        }
+        byId.set(layoutId, {
+          Id: layoutId,
+          Name: item?.Name || detail?.Name || layoutId,
+          TableEnumOrId: item?.TableEnumOrId || detail?.TableEnumOrId || objectApiName
+        });
+      } catch (_) {
+        // Ignore per-layout detail failures.
+      }
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  try {
+    const describeLayouts = await runPageLayoutDescribeBestEffort(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId);
+    hadSuccessfulAttempt = true;
+    for (const item of describeLayouts) {
+      byId.set(item.Id, item);
+    }
+  } catch (error) {
+    lastError = error;
+  }
+
+  if (byId.size > 0) {
+    return Array.from(byId.values());
+  }
+  if (!hadSuccessfulAttempt && lastError) {
     throw createError('LAYOUT_SCAN_UNAVAILABLE', 'Page Layout scan is unavailable in this org/API shape.');
   }
+  return [];
+}
+
+async function runPageLayoutDescribeBestEffort(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const payload = await runSingleJsonGet(
+    baseUrl,
+    `/services/data/${API_VERSION}/sobjects/${encodeURIComponent(objectApiName)}/describe/layouts/`,
+    tabId
+  );
+  const layouts = Array.isArray(payload?.layouts) ? payload.layouts : [];
+  const matches = [];
+  for (const layout of layouts) {
+    const text = JSON.stringify(layout || {});
+    if (!containsFieldReferenceText(text, fieldApiName, fullFieldName)) {
+      continue;
+    }
+    const id = layout?.id || layout?.Id || layout?.name || `layout:${matches.length + 1}`;
+    matches.push({
+      Id: id,
+      Name: layout?.name || layout?.layoutName || id,
+      TableEnumOrId: objectApiName
+    });
+  }
+  return matches;
 }
 
 async function runListViewBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
   const escapedObject = escapeSoqlValue(objectApiName);
-  const soql = `SELECT Id, Name, SobjectType, Query FROM ListView WHERE SobjectType = '${escapedObject}' ORDER BY Name`;
-  try {
-    const records = await runDataQuery(baseUrl, soql, tabId);
-    return records.filter((item) =>
-      containsFieldReferenceText(item?.Query || '', fieldApiName, fullFieldName)
-    );
-  } catch (_) {
-    throw createError('LIST_VIEW_SCAN_UNAVAILABLE', 'List View scan is unavailable in this org/API shape.');
+  const candidates = [
+    `SELECT Id, Name, SobjectType, Query FROM ListView WHERE SobjectType = '${escapedObject}' ORDER BY Name`,
+    `SELECT Id, Name, SobjectType, Columns FROM ListView WHERE SobjectType = '${escapedObject}' ORDER BY Name`,
+    `SELECT Id, Name, SobjectType, DeveloperName FROM ListView WHERE SobjectType = '${escapedObject}' ORDER BY Name`
+  ];
+
+  const byId = new Map();
+  for (const soql of candidates) {
+    try {
+      const records = await runDataQuery(baseUrl, soql, tabId);
+      for (const item of records) {
+        const scanText = [
+          item?.Query || '',
+          item?.Columns || '',
+          item?.DeveloperName || '',
+          item?.Name || ''
+        ].join(' ');
+        if (containsFieldReferenceText(scanText, fieldApiName, fullFieldName)) {
+          byId.set(item.Id, item);
+        }
+      }
+    } catch (_) {
+      // keep trying other list-view shapes
+    }
   }
+
+  if (byId.size > 0) {
+    return Array.from(byId.values());
+  }
+
+  // Extra fallback: UI API list metadata often contains selected/displayed fields.
+  try {
+    const uiApiItems = await runListViewUiApiBestEffort(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId);
+    for (const item of uiApiItems) {
+      byId.set(item.Id, item);
+    }
+  } catch (_) {
+    // Best-effort only.
+  }
+
+  // Additional fallback: classic listview describe endpoints.
+  try {
+    const describedItems = await runListViewDescribeBestEffort(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId);
+    for (const item of describedItems) {
+      byId.set(item.Id, item);
+    }
+  } catch (_) {
+    // Best-effort only.
+  }
+
+  return Array.from(byId.values());
+}
+
+async function runListViewUiApiBestEffort(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const path = `/services/data/${API_VERSION}/ui-api/list-info/${encodeURIComponent(objectApiName)}`;
+  const payload = await runSingleJsonGet(baseUrl, path, tabId);
+  const listMap = payload?.lists && typeof payload.lists === 'object' ? payload.lists : {};
+
+  const items = [];
+  for (const [id, raw] of Object.entries(listMap)) {
+    const text = JSON.stringify(raw || {});
+    if (!containsFieldReferenceText(text, fieldApiName, fullFieldName)) {
+      continue;
+    }
+    items.push({
+      Id: id,
+      Name: raw?.label || raw?.developerName || id,
+      SobjectType: objectApiName
+    });
+  }
+  return items;
+}
+
+async function runListViewDescribeBestEffort(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
+  const listPath = `/services/data/${API_VERSION}/sobjects/${encodeURIComponent(objectApiName)}/listviews`;
+  const listPayload = await runSingleJsonGet(baseUrl, listPath, tabId);
+  const listviews = Array.isArray(listPayload?.listviews) ? listPayload.listviews : [];
+  const matches = [];
+
+  // Guardrail: avoid excessive API calls in very large orgs.
+  const capped = listviews.slice(0, 60);
+  for (const lv of capped) {
+    const lvId = lv?.id || lv?.Id;
+    if (!lvId) {
+      continue;
+    }
+    const describePath = `/services/data/${API_VERSION}/sobjects/${encodeURIComponent(objectApiName)}/listviews/${encodeURIComponent(
+      lvId
+    )}/describe`;
+    try {
+      const detail = await runSingleJsonGet(baseUrl, describePath, tabId);
+      const text = JSON.stringify(detail || {});
+      if (!containsFieldReferenceText(text, fieldApiName, fullFieldName)) {
+        continue;
+      }
+      matches.push({
+        Id: lvId,
+        Name: lv?.label || lv?.developerName || lv?.name || lvId,
+        SobjectType: objectApiName
+      });
+    } catch (_) {
+      // skip individual listview describe failures
+    }
+  }
+
+  return matches;
+}
+
+async function runSingleJsonGet(baseUrl, path, tabId) {
+  const candidates = buildApiBaseCandidates(baseUrl);
+  let lastError = null;
+  for (const candidate of candidates) {
+    const url = `${candidate}${path}`;
+    try {
+      const result = await fetchSalesforceJson(candidate, url, tabId);
+      if (result.status < 200 || result.status >= 300) {
+        throw createError('API_ERROR', `Request failed with status ${result.status}`);
+      }
+      if (!result.data || typeof result.data !== 'object') {
+        throw createError('API_ERROR', 'Unexpected non-JSON response body.');
+      }
+      return result.data;
+    } catch (error) {
+      lastError = error;
+      if (isPermissionError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError || createError('API_ERROR', 'Unable to execute API request.');
 }
 
 async function runReportTypeBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) {
@@ -584,6 +855,37 @@ function toClientError(error) {
   };
 }
 
+function extractSalesforceErrorMessage(data) {
+  if (!data) {
+    return null;
+  }
+  if (Array.isArray(data)) {
+    const first = data[0];
+    if (first && typeof first.message === 'string' && first.message.trim()) {
+      return first.message.trim();
+    }
+    return null;
+  }
+  if (typeof data === 'object') {
+    if (typeof data.message === 'string' && data.message.trim()) {
+      return data.message.trim();
+    }
+    if (Array.isArray(data.errors) && data.errors.length) {
+      const first = data.errors[0];
+      if (first && typeof first.message === 'string' && first.message.trim()) {
+        return first.message.trim();
+      }
+    }
+    if (Array.isArray(data.error) && data.error.length) {
+      const first = data.error[0];
+      if (first && typeof first.message === 'string' && first.message.trim()) {
+        return first.message.trim();
+      }
+    }
+  }
+  return null;
+}
+
 function createError(code, message, options = null) {
   const error = new Error(message);
   error.code = code;
@@ -656,293 +958,285 @@ function looksLikeSalesforceId(value) {
 }
 
 async function fetchSalesforceJson(baseUrl, url, tabId) {
-  const debugTrail = [];
-  const primary = await fetchInServiceWorker(url, baseUrl);
-  if (primary.debug) {
-    debugTrail.push(primary.debug);
-  }
-  const shouldTryTabFallback =
-    Number.isInteger(tabId) &&
-    ((primary.ok && primary.status === 401) ||
-      (!primary.ok && (primary.errorCode === 'NOT_LOGGED_IN' || primary.errorCode === 'NETWORK_ERROR')));
-
-  if (shouldTryTabFallback) {
-    const proxy = await fetchViaTab(tabId, url);
-    if (proxy.debug) {
-      debugTrail.push(proxy.debug);
-    }
-    if (proxy.ok) {
-      return {
-        ...proxy,
-        debug: { stage: 'resolved', path: 'tab_proxy', status: proxy.status, tabId, url, debugTrail }
-      };
-    }
-    throw createError(proxy.errorCode || 'API_ERROR', proxy.errorMessage || 'Salesforce API request failed.', { debugTrail });
-  }
-
-  if (primary.ok) {
+  const proxy = await forwardToolingQueryToTab(url, Number.isInteger(tabId) ? tabId : null);
+  if (proxy?.ok === true) {
     return {
-      ...primary,
-      debug: { stage: 'resolved', path: 'service_worker', status: primary.status, url, debugTrail }
+      status: proxy.status,
+      data: proxy.data,
+      debug: { stage: 'tab_content_fetch', status: proxy.status, url }
     };
   }
 
-  throw createError(primary.errorCode || 'API_ERROR', primary.errorMessage || 'Salesforce API request failed.', { debugTrail });
-}
-
-async function fetchInServiceWorker(url) {
-  try {
-    const response = await fetch(url, buildFetchOptions());
-
-    const contentType = response.headers.get('content-type') || '';
-    const raw = await response.text();
-    if (response.status === 401) {
-      const retry = await fetchWithSessionBearer(url);
-      if (retry) {
-        return retry;
-      }
-    }
-
-    if (!contentType.includes('application/json')) {
-      return {
-        ok: false,
-        status: response.status,
-        errorCode: 'NOT_LOGGED_IN',
-        errorMessage: 'Unexpected non-JSON response from Salesforce. Session may be expired.',
-        debug: { stage: 'service_worker_fetch', url, status: response.status, contentType: contentType || 'unknown', auth: 'cookie' }
-      };
-    }
-
-    return {
-      ok: true,
-      status: response.status,
-      data: safeJsonParse(raw),
-      debug: { stage: 'service_worker_fetch', url, status: response.status, contentType, auth: 'cookie' }
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      errorCode: 'NETWORK_ERROR',
-      errorMessage: error.message || 'Network error while contacting Salesforce.',
-      debug: { stage: 'service_worker_fetch', url, status: 0, message: error.message || 'Network error', auth: 'cookie' }
-    };
-  }
-}
-
-function buildFetchOptions(extraHeaders = null) {
-  const headers = { Accept: 'application/json' };
-  if (extraHeaders && typeof extraHeaders === 'object') {
-    Object.assign(headers, extraHeaders);
-  }
-  return {
-    method: 'GET',
-    credentials: 'include',
-    headers
-  };
-}
-
-async function fetchWithSessionBearer(url) {
-  try {
-    const sid = await getSidForUrl(url);
-    if (!sid) {
-      return null;
-    }
-
-    const response = await fetch(url, buildFetchOptions({ Authorization: `Bearer ${sid}` }));
-    const contentType = response.headers.get('content-type') || '';
-    const raw = await response.text();
-    if (!contentType.includes('application/json')) {
-      return {
-        ok: false,
-        status: response.status,
-        errorCode: response.status === 401 ? 'NOT_LOGGED_IN' : 'API_ERROR',
-        errorMessage: 'Non-JSON response from Salesforce using bearer session.',
-        debug: { stage: 'service_worker_fetch', url, status: response.status, contentType: contentType || 'unknown', auth: 'bearer_sid' }
-      };
-    }
-
-    return {
-      ok: true,
-      status: response.status,
-      data: safeJsonParse(raw),
-      debug: { stage: 'service_worker_fetch', url, status: response.status, contentType, auth: 'bearer_sid' }
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      errorCode: 'NETWORK_ERROR',
-      errorMessage: error.message || 'Network error while contacting Salesforce with bearer session.',
-      debug: { stage: 'service_worker_fetch', url, status: 0, message: error.message || 'Network error', auth: 'bearer_sid' }
-    };
-  }
-}
-
-async function getSidForUrl(urlString) {
-  const url = new URL(urlString);
-  const hosts = buildApiBaseCandidates(`${url.protocol}//${url.hostname}`).map((origin) => new URL(origin).hostname);
-
-  for (const host of hosts) {
+  const shouldRetryWithSid =
+    proxy?.status === 0 ||
+    /failed to fetch/i.test(proxy?.error || '') ||
+    /cross-origin blocked/i.test(proxy?.error || '');
+  if (shouldRetryWithSid) {
     try {
-      const cookie = await chrome.cookies.get({ url: `${url.protocol}//${host}/`, name: 'sid' });
-      if (cookie && cookie.value) {
+      const sidResult = await fetchSalesforceJsonWithSid(url);
+      return {
+        status: sidResult.status,
+        data: sidResult.data,
+        debug: {
+          stage: 'service_worker_sid_fetch',
+          status: sidResult.status,
+          url
+        }
+      };
+    } catch (sidError) {
+      throw createError(sidError.code || 'NOT_LOGGED_IN', sidError.message || 'Salesforce session is not available.', {
+        debugTrail: [
+          { stage: 'tab_content_fetch', url, response: proxy || null },
+          { stage: 'service_worker_sid_fetch', url, error: toClientError(sidError) }
+        ]
+      });
+    }
+  }
+
+  const code =
+    proxy?.status === 401 || proxy?.status === 0
+      ? 'NOT_LOGGED_IN'
+      : proxy?.status === 403
+        ? 'INSUFFICIENT_PERMISSIONS'
+        : 'API_ERROR';
+  const message =
+    proxy?.error ||
+    (typeof proxy?.contentType === 'string' &&
+    !proxy.contentType.includes('application/json')
+      ? 'Salesforce session is not available. Please log in and refresh.'
+      : null) ||
+    proxy?.statusText ||
+    (typeof proxy?.body === 'string' ? proxy.body : null) ||
+    'Salesforce API request failed.';
+  throw createError(code, message, {
+    debugTrail: [{ stage: 'tab_content_fetch', url, response: proxy || null }]
+  });
+}
+
+async function fetchSalesforceJsonWithSid(urlString) {
+  const sid = await findSidForUrl(urlString);
+  if (!sid) {
+    throw createError('NOT_LOGGED_IN', 'Salesforce session cookie is not available.');
+  }
+
+  let res;
+  try {
+    res = await fetch(urlString, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${sid}`
+      }
+    });
+  } catch (error) {
+    throw createError('NETWORK_ERROR', error?.message || 'Failed to fetch with session cookie.');
+  }
+
+  const text = await res.text();
+  const contentType = res.headers.get('content-type') || '';
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    data = null;
+  }
+
+  if (res.status === 401) {
+    throw createError('NOT_LOGGED_IN', 'Salesforce session is not available. Please log in again.');
+  }
+  if (res.status === 403) {
+    throw createError('INSUFFICIENT_PERMISSIONS', 'Tooling API access denied for this user.');
+  }
+  if (!res.ok) {
+    const sfMessage = extractSalesforceErrorMessage(data) || text || `Salesforce API failed with status ${res.status}.`;
+    throw createError('API_ERROR', sfMessage);
+  }
+  if (!contentType.includes('application/json') || data === null) {
+    throw createError('NOT_LOGGED_IN', 'Salesforce returned a non-JSON response. Please log in and refresh.');
+  }
+
+  return { status: res.status, data };
+}
+
+async function findSidForUrl(urlString) {
+  const target = new URL(urlString);
+  const candidates = [target.origin];
+  const host = target.hostname;
+  if (host.includes('.lightning.force.com')) {
+    candidates.push(`${target.protocol}//${host.replace('.lightning.force.com', '.my.salesforce.com')}`);
+  } else if (host.includes('.my.salesforce.com')) {
+    candidates.push(`${target.protocol}//${host.replace('.my.salesforce.com', '.lightning.force.com')}`);
+  }
+
+  for (const origin of [...new Set(candidates)]) {
+    try {
+      const cookie = await chrome.cookies.get({ url: origin, name: 'sid' });
+      if (cookie?.value) {
         return cookie.value;
       }
     } catch (_) {
-      // ignore and continue fallback hosts
+      // continue to next candidate
     }
   }
-
   return null;
 }
 
-async function fetchViaTab(tabId, url) {
-  try {
-    const response = await chrome.tabs.sendMessage(tabId, {
-      type: 'FIELDLENS_FETCH_JSON',
+async function forwardToolingQueryToTab(url, preferredTabId = null) {
+  if (Number.isInteger(preferredTabId)) {
+    return sendToolingQueryToTab(preferredTabId, url);
+  }
+
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+  if (!tab || !Number.isInteger(tab.id)) {
+    return { ok: false, error: 'No active tab' };
+  }
+
+  return sendToolingQueryToTab(tab.id, url);
+}
+
+
+async function sendToolingQueryToTab(tabId, url) {
+  console.debug('[FieldLens] Forwarding tooling query to tab', tabId);
+
+  // Helper: send message once
+  async function _send() {
+    try {
+      const injected = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: async (targetUrl) => {
+          try {
+            const parsedUrl = new URL(targetUrl, window.location.origin);
+            if (parsedUrl.origin !== window.location.origin) {
+              return { ok: false, status: 0, error: `Cross-origin blocked in main-world fetch: ${parsedUrl.origin}` };
+            }
+            const res = await fetch(parsedUrl.toString(), {
+              method: 'GET',
+              credentials: 'include',
+              headers: { Accept: 'application/json' }
+            });
+            const text = await res.text();
+            const contentType = res.headers.get('content-type') || '';
+            let json = null;
+            try {
+              json = JSON.parse(text);
+            } catch (_) {
+              json = null;
+            }
+            if (json !== null) {
+              if (res.ok) {
+                return { ok: true, status: res.status, data: json };
+              }
+              return {
+                ok: false,
+                status: res.status,
+                statusText: res.statusText,
+                body: json,
+                contentType
+              };
+            }
+            return {
+              ok: false,
+              status: res.status,
+              statusText: res.statusText,
+              body: text,
+              contentType
+            };
+          } catch (error) {
+            return { ok: false, status: 0, error: error?.message || 'Main-world fetch failed' };
+          }
+        },
+        args: [url]
+      });
+      const first = Array.isArray(injected) && injected[0] ? injected[0].result : null;
+      if (first) {
+        return first;
+      }
+    } catch (_) {
+      // fall through to content script messaging fallback
+    }
+
+    return await chrome.tabs.sendMessage(tabId, {
+      type: 'FIELDLENS_TOOLING_QUERY',
       url
     });
-
-    if (response && response.ok) {
-      return {
-        ok: true,
-        status: response.status,
-        data: response.data,
-        debug: { stage: 'tab_proxy_fetch', transport: 'content_script', url, tabId, status: response.status }
-      };
-    }
-
-    const scriptFallback = await fetchViaMainWorld(tabId, url);
-    if (scriptFallback.ok) {
-      return {
-        ok: true,
-        status: scriptFallback.status,
-        data: scriptFallback.data,
-        debug: { stage: 'tab_proxy_fetch', transport: 'main_world', url, tabId, status: scriptFallback.status }
-      };
-    }
-
-    return {
-      ok: false,
-      status: response?.status || scriptFallback.status || 0,
-      errorCode: response?.error?.code || scriptFallback.errorCode || 'NOT_LOGGED_IN',
-      errorMessage:
-        response?.error?.message ||
-        scriptFallback.errorMessage ||
-        'Unable to proxy Salesforce request through tab context.',
-      debug: {
-        stage: 'tab_proxy_fetch',
-        transport: 'content_script+main_world',
-        url,
-        tabId,
-        status: response?.status || scriptFallback.status || 0,
-        message:
-          response?.error?.message ||
-          scriptFallback.errorMessage ||
-          'Proxy request failed'
-      }
-    };
-  } catch (error) {
-    const scriptFallback = await fetchViaMainWorld(tabId, url);
-    if (scriptFallback.ok) {
-      return {
-        ok: true,
-        status: scriptFallback.status,
-        data: scriptFallback.data,
-        debug: { stage: 'tab_proxy_fetch', transport: 'main_world', url, tabId, status: scriptFallback.status }
-      };
-    }
-
-    return {
-      ok: false,
-      status: 0,
-      errorCode: 'NOT_LOGGED_IN',
-      errorMessage: scriptFallback.errorMessage || 'Unable to access tab session for Salesforce API request.',
-      debug: {
-        stage: 'tab_proxy_fetch',
-        transport: 'main_world',
-        url,
-        tabId,
-        status: scriptFallback.status || 0,
-        message: scriptFallback.errorMessage || error.message || 'tabs.sendMessage failed'
-      }
-    };
   }
-}
 
-async function fetchViaMainWorld(tabId, url) {
-  try {
-    const results = await chrome.scripting.executeScript({
+  // Helper: check if tab URL looks like Salesforce Lightning
+  async function _isSalesforceLightningTab() {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const tabUrl = tab?.url || '';
+
+      // Must be HTTPS + one of the allowed SF domains + Lightning path
+      // (matches your content_scripts patterns)
+      return (
+        /^https:\/\/.+\.(salesforce\.com|my\.salesforce\.com|lightning\.force\.com)\/lightning\//.test(
+          tabUrl
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  // Helper: try injecting content.js then retry once
+  async function _injectContentScriptOnce() {
+    // In MV3, executeScript requires "scripting" permission (you already have)
+    await chrome.scripting.executeScript({
       target: { tabId },
-      world: 'MAIN',
-      func: async (requestUrl) => {
-        try {
-          const response = await fetch(requestUrl, {
-            method: 'GET',
-            credentials: 'include',
-            headers: { Accept: 'application/json' }
-          });
-          const contentType = response.headers.get('content-type') || '';
-          const raw = await response.text();
-          return {
-            ok: true,
-            status: response.status,
-            contentType,
-            raw
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            status: 0,
-            errorMessage: error?.message || 'MAIN world fetch failed'
-          };
-        }
-      },
-      args: [url]
+      files: ['content.js']
     });
+  }
 
-    const result = Array.isArray(results) ? results[0]?.result : null;
-    if (!result || !result.ok) {
-      return {
-        ok: false,
-        status: result?.status || 0,
-        errorCode: 'PROXY_FETCH_FAILED',
-        errorMessage: result?.errorMessage || 'MAIN world execution returned no result.'
-      };
+  // 1) First attempt
+  try {
+    const response = await _send();
+    if (response) return response;
+
+    // No response is unusual but handle it.
+    // Try injection if on SF Lightning.
+    if (await _isSalesforceLightningTab()) {
+      console.debug('[FieldLens] No response; attempting content.js injection + retry');
+      await _injectContentScriptOnce();
+
+      const response2 = await _send();
+      if (response2) return response2;
     }
 
-    if (!String(result.contentType || '').includes('application/json')) {
-      return {
-        ok: false,
-        status: result.status || 0,
-        errorCode: 'PROXY_FETCH_FAILED',
-        errorMessage: `MAIN world non-JSON response status=${result.status || 0} contentType=${result.contentType || 'unknown'}`
-      };
-    }
-
-    return {
-      ok: true,
-      status: result.status,
-      data: safeJsonParse(result.raw || '')
-    };
-  } catch (error) {
     return {
       ok: false,
-      status: 0,
-      errorCode: 'PROXY_FETCH_FAILED',
-      errorMessage: error?.message || 'MAIN world script execution failed'
+      error: 'FieldLens content script not available. Open a Salesforce Lightning tab and refresh.'
+    };
+  } catch (error) {
+    // 2) If sendMessage throws, attempt inject+retry only if on SF Lightning
+    const isSf = await _isSalesforceLightningTab();
+
+    if (isSf) {
+      try {
+        console.debug('[FieldLens] sendMessage failed; injecting content.js + retry', error?.message);
+        await _injectContentScriptOnce();
+
+        const response2 = await _send();
+        if (response2) return response2;
+      } catch (error2) {
+        return {
+          ok: false,
+          error: 'FieldLens content script not available. Open a Salesforce Lightning tab and refresh.',
+          detail: error2?.message || error?.message || null
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      error: 'FieldLens can only run on Salesforce Lightning pages. Open a Lightning tab and try again.',
+      detail: error?.message || null
     };
   }
 }
 
-function safeJsonParse(raw) {
-  try {
-    return JSON.parse(raw);
-  } catch (_) {
-    return [];
-  }
-}
 
 async function getCached(key) {
   const store = await chrome.storage.local.get(key);

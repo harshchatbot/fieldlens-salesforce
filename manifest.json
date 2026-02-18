@@ -9,10 +9,11 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "activeTab", "scripting", "cookies", "clipboardWrite"],
+  "permissions": ["storage", "activeTab", "scripting", "cookies"],
   "host_permissions": [
-    "*://*.salesforce.com/*",
-    "*://*.force.com/*"
+    "https://*.salesforce.com/*",
+    "https://*.my.salesforce.com/*",
+    "https://*.lightning.force.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -29,20 +30,19 @@
   "content_scripts": [
     {
       "matches": [
-        "*://*.salesforce.com/lightning/*",
-        "*://*.force.com/lightning/*"
+        "https://*.salesforce.com/lightning/*",
+        "https://*.my.salesforce.com/lightning/*",
+        "https://*.lightning.force.com/lightning/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
-    {
-      "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js", "ui/techfi-logo.svg"],
-      "matches": [
-        "*://*.salesforce.com/*",
-        "*://*.force.com/*"
-      ]
-    }
-  ]
+  {
+    "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js", "ui/techfi-logo.svg"],
+    "matches": ["<all_urls>"]
+  }
+]
+
 }

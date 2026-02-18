@@ -23,7 +23,12 @@ FieldLens is a Chrome Extension (Manifest V3) for Salesforce Lightning Experienc
 
 On first install, a welcome page opens automatically:
 
-- `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/welcome/welcome.html`
+- `/Users/harshveersinghnirwan/Downloads/fieldlens-salesforce/welcome.html`
+
+## Permissions
+
+- `storage`: caches scan results and local UI state for faster repeat scans.
+- `activeTab`, `scripting`: injects and runs the FieldLens panel/logic in the current Salesforce Lightning tab.
 
 ## Salesforce Sandbox Testing
 
