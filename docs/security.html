@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FieldLens Security Notes | Salesforce Lightning Extension</title>
+    <meta
+      name="description"
+      content="Security notes for FieldLens for Salesforce, including Manifest V3 controls, Salesforce domain restrictions, session handling, and storage practices."
+    />
+    <meta
+      name="keywords"
+      content="FieldLens security notes, Salesforce extension security, Manifest V3 security, Salesforce Lightning Chrome extension"
+    />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://harshchatbot.github.io/fieldlens-salesforce/security.html" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="FieldLens Security Notes | Salesforce Lightning Extension" />
+    <meta
+      property="og:description"
+      content="Review security architecture and data handling for FieldLens, the Salesforce field impact analysis Chrome extension."
+    />
+    <meta property="og:url" content="https://harshchatbot.github.io/fieldlens-salesforce/security.html" />
+    <meta property="og:image" content="https://harshchatbot.github.io/fieldlens-salesforce/icons/icon128.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="FieldLens Security Notes" />
+    <meta name="twitter:description" content="Security details for the FieldLens for Salesforce Chrome extension." />
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height: 1.6; margin: 0; background: #0b1e2d; color: #eaf2ff; }
+      main { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+      h1,h2 { line-height: 1.2; }
+      a { color: #7bc043; }
+      .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 18px 18px; margin: 14px 0; }
+      code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 6px; }
+      .muted { opacity: 0.85; }
+      .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+    </style>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": "FieldLens Security Notes",
+        "url": "https://harshchatbot.github.io/fieldlens-salesforce/security.html",
+        "description": "Security notes page for FieldLens for Salesforce Chrome extension."
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Security Notes – FieldLens for Salesforce</h1>
+      <p class="muted">Last updated: <strong>2026-02-20</strong></p>
+
+      <div class="card">
+        <h2>Security Controls</h2>
+        <ul>
+          <li>Manifest V3 service worker architecture.</li>
+          <li>Host permissions restricted to Salesforce HTTPS domains.</li>
+          <li>Content script restricted to Salesforce Lightning URL patterns.</li>
+          <li>Web-accessible resources scoped to Salesforce Lightning URL patterns.</li>
+          <li>No remote code loading.</li>
+          <li>No use of <code>eval</code> or dynamic code execution.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Session Handling</h2>
+        <ul>
+          <li>Uses existing Salesforce browser session.</li>
+          <li>No persistent OAuth token storage.</li>
+          <li>
+            <code>sid</code> cookie is read only as fallback to complete Salesforce API requests where
+            CORS/session policies block tab-context fetch.
+          </li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Storage</h2>
+        <ul>
+          <li>Uses <code>chrome.storage.local</code> for non-sensitive settings and 10-minute cache.</li>
+          <li>Cache keys are scoped by org host + object + field + scan mode.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Recommended Operational Practices</h2>
+        <ul>
+          <li>Publish only signed builds from controlled source.</li>
+          <li>Review permissions before each release.</li>
+          <li>Increment manifest version for each store submission.</li>
+          <li>Re-test in sandbox and production org shapes before release.</li>
+        </ul>
+      </div>
+
+      <div class="links">
+        <a href="./index.html">Back to Docs Home</a>
+        <a href="./privacy.html">Privacy Policy</a>
+        <a href="./store-checklist.html">Store Checklist</a>
+      </div>
+    </main>
+  </body>
+</html>

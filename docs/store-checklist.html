@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FieldLens Chrome Web Store Checklist | Salesforce Extension</title>
+    <meta
+      name="description"
+      content="Chrome Web Store deployment checklist for FieldLens for Salesforce, covering permissions, metadata, QA, packaging, and post-submission checks."
+    />
+    <meta
+      name="keywords"
+      content="FieldLens Chrome Web Store checklist, Salesforce extension deployment, Chrome extension review checklist, Salesforce Lightning extension release"
+    />
+    <meta name="robots" content="index,follow" />
+    <link rel="canonical" href="https://harshchatbot.github.io/fieldlens-salesforce/store-checklist.html" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="FieldLens Chrome Web Store Checklist | Salesforce Extension" />
+    <meta
+      property="og:description"
+      content="Pre-submission and QA checklist for publishing the FieldLens Salesforce Chrome extension."
+    />
+    <meta property="og:url" content="https://harshchatbot.github.io/fieldlens-salesforce/store-checklist.html" />
+    <meta property="og:image" content="https://harshchatbot.github.io/fieldlens-salesforce/icons/icon128.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="FieldLens Chrome Web Store Checklist" />
+    <meta name="twitter:description" content="Deployment checklist for the FieldLens Salesforce Chrome extension." />
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height: 1.6; margin: 0; background: #0b1e2d; color: #eaf2ff; }
+      main { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+      h1,h2 { line-height: 1.2; }
+      a { color: #7bc043; }
+      .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 18px 18px; margin: 14px 0; }
+      .muted { opacity: 0.85; }
+      .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+      ul { margin: 0; padding-left: 18px; }
+      li { margin: 6px 0; }
+      code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 6px; }
+    </style>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "name": "FieldLens Chrome Web Store Checklist",
+        "url": "https://harshchatbot.github.io/fieldlens-salesforce/store-checklist.html",
+        "description": "Deployment checklist page for FieldLens for Salesforce Chrome extension."
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Chrome Web Store Deployment Checklist – FieldLens for Salesforce</h1>
+      <p class="muted">Last updated: <strong>2026-02-20</strong></p>
+
+      <div class="card">
+        <h2>Pre-Submission</h2>
+        <ul>
+          <li>[ ] Manifest version is 3.</li>
+          <li>[ ] Extension version is bumped for this release.</li>
+          <li>[ ] <code>host_permissions</code> are limited to Salesforce domains only.</li>
+          <li>[ ] <code>web_accessible_resources.matches</code> are Lightning-only.</li>
+          <li>[ ] No remote code and no unknown obfuscated dependencies.</li>
+          <li>[ ] Privacy policy URL/content is ready.</li>
+          <li>[ ] Security notes reviewed.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Required Store Metadata</h2>
+        <ul>
+          <li>[ ] Single-purpose description clearly states Salesforce field impact analysis.</li>
+          <li>[ ] Permission justification text includes storage, scripting/activeTab, and cookies fallback rationale.</li>
+          <li>[ ] Screenshots for setup-field and record-page usage.</li>
+          <li>[ ] Support contact and website links.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Functional QA</h2>
+        <ul>
+          <li>[ ] Setup field page auto-detect works.</li>
+          <li>[ ] Record page field selector works.</li>
+          <li>[ ] Quick and Deep scan work in sandbox.</li>
+          <li>[ ] Error states are user-friendly.</li>
+          <li>[ ] Copy Summary and Export CSV work.</li>
+          <li>[ ] Retry actions work on failed load/scan.</li>
+          <li>[ ] Settings persist after refresh/reopen.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Packaging</h2>
+        <ul>
+          <li>[ ] Remove temporary debug instrumentation.</li>
+          <li>[ ] Run syntax checks:
+            <ul>
+              <li><code>node --check background.js</code></li>
+              <li><code>node --check content.js</code></li>
+              <li><code>node --check ui/panel.js</code></li>
+              <li><code>node --check shared/fieldlens_core.js</code></li>
+            </ul>
+          </li>
+          <li>[ ] Run unit tests: <code>node scripts/unit_tests.js</code></li>
+          <li>[ ] Zip extension root for upload (exclude temp files).</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Post-Submission</h2>
+        <ul>
+          <li>[ ] Monitor review feedback and respond with permission rationale if requested.</li>
+          <li>[ ] Track first-release runtime errors in sandbox before broad rollout.</li>
+        </ul>
+      </div>
+
+      <div class="links">
+        <a href="./index.html">Back to Docs Home</a>
+        <a href="./privacy.html">Privacy Policy</a>
+        <a href="./security.html">Security Notes</a>
+      </div>
+    </main>
+  </body>
+</html>
