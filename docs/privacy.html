@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FieldLens Privacy Policy</title>
+    <meta name="robots" content="index,follow" />
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; line-height: 1.6; margin: 0; background: #0b1e2d; color: #eaf2ff; }
+      main { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+      h1,h2 { line-height: 1.2; }
+      a { color: #7bc043; }
+      .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 18px 18px; margin: 14px 0; }
+      code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 6px; }
+      .muted { opacity: 0.85; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Privacy Policy – FieldLens for Salesforce</h1>
+      <p class="muted">Last updated: <strong>2026-02-20</strong></p>
+
+      <div class="card">
+        <h2>Overview</h2>
+        <p>
+          FieldLens for Salesforce is a Chrome extension that helps users analyze Salesforce Lightning field impact by scanning
+          Salesforce metadata references (e.g., Apex, Flows, Validation Rules, Layouts, and FLS).
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Data We Access</h2>
+        <ul>
+          <li><strong>Salesforce page context</strong> (e.g., the current Lightning URL to identify object/field context).</li>
+          <li><strong>Salesforce metadata responses</strong> returned from Salesforce REST/Tooling APIs for scanning dependencies.</li>
+        </ul>
+        <p class="muted">FieldLens does not read Salesforce record data for tracking or analytics purposes.</p>
+      </div>
+
+      <div class="card">
+        <h2>Data We Store</h2>
+        <ul>
+          <li><strong>Local settings</strong> (e.g., UI preferences, default scan mode).</li>
+          <li><strong>Short-lived local cache</strong> (optional) to improve performance for repeat scans.</li>
+        </ul>
+        <p class="muted">All storage is local to your browser using <code>chrome.storage</code>.</p>
+      </div>
+
+      <div class="card">
+        <h2>Session & Authentication</h2>
+        <p>
+          FieldLens uses your active Salesforce browser session to make authorized metadata requests to your Salesforce org.
+          In some edge cases, FieldLens may read the Salesforce session cookie named <code>sid</code> using the Chrome
+          <code>cookies</code> permission <strong>only as a runtime authentication fallback</strong>.
+        </p>
+        <ul>
+          <li>The <code>sid</code> cookie is <strong>not stored</strong> by FieldLens.</li>
+          <li>The <code>sid</code> cookie is <strong>not logged</strong> or sent to any external server.</li>
+          <li>The cookie is used only to authorize requests to the <strong>same Salesforce domain</strong> you are actively using.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Data Sharing</h2>
+        <p>
+          FieldLens does <strong>not</strong> sell, rent, or share user data with third parties. FieldLens does not transmit scan data
+          to external servers. All processing occurs locally and via Salesforce APIs within your Salesforce session.
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Remote Code</h2>
+        <p>
+          FieldLens does not use remote code. All JavaScript executed by the extension is packaged within the extension.
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Contact</h2>
+        <p>
+          For questions or support, contact: <a href="mailto:support@techfilabs.com">support@techfilabs.com</a>
+          <br />
+          Website: <a href="https://techfilabs.com" target="_blank" rel="noopener">techfilabs.com</a>
+        </p>
+      </div>
+
+      <p class="muted">
+        Disclaimer: FieldLens is an independent productivity tool and is not affiliated with Salesforce.
+      </p>
+    </main>
+  </body>
+</html>
