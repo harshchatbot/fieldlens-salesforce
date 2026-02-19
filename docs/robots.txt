@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Replace with your final published docs URL before launch.
+Sitemap: https://YOUR-DOCS-DOMAIN/sitemap.xml

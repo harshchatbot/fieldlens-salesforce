@@ -3,9 +3,47 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="FieldLens for Salesforce documentation" />
-    <title>FieldLens for Salesforce - Documentation</title>
+    <meta
+      name="description"
+      content="FieldLens for Salesforce is a Chrome extension for Salesforce Lightning field impact analysis. Discover Apex, Validation Rules, Triggers, Flows, Page Layouts, List Views, and FLS usage references."
+    />
+    <meta
+      name="keywords"
+      content="FieldLens, Salesforce field impact analysis, Salesforce metadata scanner, Salesforce admin tools, Salesforce developer tools, Salesforce Chrome extension, Salesforce Lightning extension, field usage scanner, Apex impact analysis, Salesforce flow impact"
+    />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="FieldLens for Salesforce - Field Impact Analysis Chrome Extension" />
+    <meta
+      property="og:description"
+      content="Analyze Salesforce field impact across Apex, Triggers, Validation Rules, Flows, Layouts, List Views, Report Types, and FLS in Lightning Experience."
+    />
+    <meta property="og:image" content="../icons/icon128.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="FieldLens for Salesforce - Field Impact Analysis" />
+    <meta
+      name="twitter:description"
+      content="Salesforce Lightning Chrome extension for field impact and usage analysis."
+    />
+    <title>FieldLens for Salesforce | Salesforce Field Impact Analysis Chrome Extension</title>
     <link rel="stylesheet" href="styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "FieldLens for Salesforce",
+        "applicationCategory": "BrowserApplication",
+        "operatingSystem": "Chrome",
+        "softwareVersion": "1.1.0",
+        "description": "Chrome extension for Salesforce Lightning field impact analysis and metadata usage discovery.",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "keywords": "Salesforce field impact analysis, Salesforce Chrome extension, Salesforce Lightning metadata scanner, Apex trigger flow validation rule usage"
+      }
+    </script>
   </head>
   <body>
     <header class="hero">
@@ -29,6 +67,7 @@
         <a href="#troubleshooting">Troubleshooting</a>
         <a href="#security">Security & Privacy</a>
         <a href="#release">Release Notes</a>
+        <a href="#faq">FAQ</a>
       </nav>
 
       <section id="quick-start" class="card">
@@ -101,6 +140,22 @@
           <li>CSV export and persisted panel settings.</li>
           <li>Retry actions and diagnostics/freshness UX improvements.</li>
         </ul>
+      </section>
+
+      <section id="faq" class="card">
+        <h2>FAQ</h2>
+        <details>
+          <summary>What is FieldLens for Salesforce?</summary>
+          <p>FieldLens is a Salesforce Lightning Chrome extension for field impact analysis and metadata usage scanning.</p>
+        </details>
+        <details>
+          <summary>Who should use FieldLens?</summary>
+          <p>Salesforce Admins, Developers, Architects, and Consultants who need fast visibility into field dependencies.</p>
+        </details>
+        <details>
+          <summary>What metadata does FieldLens scan?</summary>
+          <p>It scans Apex Classes, Apex Triggers, Validation Rules, Flows, Formula Fields, Page Layouts, List Views, Report Types, and FLS/permissions.</p>
+        </details>
       </section>
     </main>
   </body>

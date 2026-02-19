@@ -34,6 +34,17 @@ If you publish with GitHub Pages from this repo, this page can be hosted like:
 
 - `https://<your-username>.github.io/<repo-name>/docs/`
 
+## SEO Keywords (Website + Store Listing)
+
+Use these naturally in your docs page, Chrome Web Store title/description, and support pages:
+
+- Salesforce field impact analysis
+- Salesforce metadata scanner
+- Salesforce Chrome extension
+- Salesforce Lightning extension
+- Apex trigger validation rule flow usage
+- Salesforce admin productivity tool
+
 ## Permissions
 
 - `storage`: stores UI settings and 10-minute local scan cache.
