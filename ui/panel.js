@@ -14,7 +14,8 @@
     loadingMessageIndex: 0,
     hideZeroGroups: false,
     settingsLoaded: false,
-    lastFailure: null
+    lastFailure: null,
+    showNoAccessInFallback: false
   };
 
   const el = {
@@ -28,6 +29,7 @@
     retryLoadBtn: document.getElementById('retryLoadBtn'),
     retryScanBtn: document.getElementById('retryScanBtn'),
     warningBanner: document.getElementById('warningBanner'),
+    nonPermissionableBanner: document.getElementById('nonPermissionableBanner'),
     diagnosticsSection: document.getElementById('diagnosticsSection'),
     diagnosticsCount: document.getElementById('diagnosticsCount'),
     diagnosticsList: document.getElementById('diagnosticsList'),
@@ -41,6 +43,7 @@
     settingsPanel: document.getElementById('settingsPanel'),
     defaultScanModeSelect: document.getElementById('defaultScanModeSelect'),
     hideZeroGroupsCheckbox: document.getElementById('hideZeroGroupsCheckbox'),
+    clearCacheBtn: document.getElementById('clearCacheBtn'),
     modeQuickBtn: document.getElementById('modeQuickBtn'),
     modeDeepBtn: document.getElementById('modeDeepBtn'),
     resultSearchWrap: document.getElementById('resultSearchWrap'),
@@ -50,13 +53,16 @@
     collapseAllBtn: document.getElementById('collapseAllBtn'),
     loadingState: document.getElementById('loadingState'),
     loadingTextValue: document.getElementById('loadingTextValue'),
+    loadingProgressFill: document.getElementById('loadingProgressFill'),
+    loadingPercentValue: document.getElementById('loadingPercentValue'),
     emptyState: document.getElementById('emptyState'),
     resultsContainer: document.getElementById('resultsContainer'),
     topImpact: document.getElementById('topImpact'),
     topImpactCount: document.getElementById('topImpactCount'),
     topImpactList: document.getElementById('topImpactList'),
     flsControls: document.getElementById('flsControls'),
-    flsCounters: document.getElementById('flsCounters')
+    flsCounters: document.getElementById('flsCounters'),
+    toggleNoAccessBtn: document.getElementById('toggleNoAccessBtn')
   };
 
   const pendingRequestMap = new Map();
@@ -65,6 +71,7 @@
   setupEvents();
   setScanMode('quick', false);
   syncFlsFilterButtons();
+  syncNoAccessToggleLabel();
   setModeBadge(false);
   loadUserSettings();
   notifyParent({ source: 'fieldlens-panel', type: 'PANEL_READY' });
@@ -150,6 +157,24 @@
         }
       });
     }
+    if (el.clearCacheBtn) {
+      el.clearCacheBtn.addEventListener('click', async () => {
+        el.clearCacheBtn.disabled = true;
+        const originalLabel = el.clearCacheBtn.textContent;
+        el.clearCacheBtn.textContent = 'Clearing...';
+        try {
+          const result = await requestParent('clearCache', {});
+          const removed = Number(result?.removed || 0);
+          showWarning(`Org cache cleared (${removed} entr${removed === 1 ? 'y' : 'ies'} removed). Run scan again for fresh data.`);
+          clearFreshness();
+        } catch (error) {
+          showError(error?.message || 'Failed to clear cache.');
+        } finally {
+          el.clearCacheBtn.disabled = false;
+          el.clearCacheBtn.textContent = originalLabel || 'Clear Org Cache';
+        }
+      });
+    }
 
     el.resultSearchInput.addEventListener('input', () => {
       clearTimeout(state.resultSearchDebounceTimer);
@@ -194,6 +219,15 @@
         setFlsFilter(next);
       });
     }
+    if (el.toggleNoAccessBtn) {
+      el.toggleNoAccessBtn.addEventListener('click', () => {
+        state.showNoAccessInFallback = !state.showNoAccessInFallback;
+        syncNoAccessToggleLabel();
+        if (state.lastScan) {
+          renderScanResult(state.lastScan);
+        }
+      });
+    }
   }
 
   async function onContextUpdate(context) {
@@ -209,6 +243,7 @@
 
     state.context = context;
     state.lastScan = null;
+    state.showNoAccessInFallback = false;
     el.copyBtn.disabled = true;
     if (el.exportCsvBtn) {
       el.exportCsvBtn.disabled = true;
@@ -299,7 +334,8 @@
     for (const field of state.filteredFields) {
       const opt = document.createElement('option');
       opt.value = field.apiName;
-      opt.textContent = `${field.label} (${field.apiName}) [${field.dataType}]`;
+      const nonPermSuffix = field.isPermissionable === false ? ' [NP]' : '';
+      opt.textContent = `${field.label} (${field.apiName}) [${field.dataType}]${nonPermSuffix}`;
       el.fieldSelect.appendChild(opt);
     }
 
@@ -339,6 +375,7 @@
       renderScanResult(result);
       renderFreshness(result);
       renderDiagnostics(result.warnings || []);
+      renderNonPermissionableBanner(result);
       clearRetryState();
     } catch (error) {
       console.error('[FieldLens] scanImpact failed', error);
@@ -368,7 +405,11 @@
     renderFlsControls(result);
 
     const flsAll = Array.isArray(result.groups?.fieldPermissions) ? result.groups.fieldPermissions : [];
-    const flsFiltered = filterFlsItems(flsAll, state.flsFilter);
+    const flsFiltered = filterFlsItems(
+      flsAll,
+      state.flsFilter,
+      result?.flsFallbackUsed === true && !state.showNoAccessInFallback
+    );
     const isDeep = (result.scanMode || state.scanMode) === 'deep';
     const groups = [
       { key: 'validationRules', label: 'Validation Rules' },
@@ -553,38 +594,53 @@
   function showLoading(text) {
     stopScanLoading();
     el.loadingTextValue.textContent = text || 'Loading...';
+    setLoadingProgress(20);
     el.loadingState.classList.remove('hidden');
   }
 
   function hideLoading() {
     stopScanLoading();
+    setLoadingProgress(0);
     el.loadingState.classList.add('hidden');
   }
 
   function startScanLoading() {
-    const messages = [
-      'Scanning references...',
-      'Analyzing Apex classes...',
-      'Analyzing Apex triggers...',
-      'Analyzing validation rules...',
-      'Analyzing field permissions...'
-    ];
-    if (state.scanMode === 'deep') {
-      messages.push('Analyzing flows...');
-      messages.push('Analyzing formula fields...');
-      messages.push('Analyzing page layouts...');
-      messages.push('Analyzing list views...');
-      messages.push('Analyzing report types...');
-    }
+    const stages = state.scanMode === 'deep'
+      ? [
+          { text: 'Scanning references...', pct: 8 },
+          { text: 'Analyzing Apex classes...', pct: 20 },
+          { text: 'Analyzing Apex triggers...', pct: 32 },
+          { text: 'Analyzing validation rules...', pct: 44 },
+          { text: 'Analyzing field permissions...', pct: 56 },
+          { text: 'Analyzing flows...', pct: 66 },
+          { text: 'Analyzing formula fields...', pct: 74 },
+          { text: 'Analyzing page layouts...', pct: 82 },
+          { text: 'Analyzing list views...', pct: 90 },
+          { text: 'Analyzing report types...', pct: 96 }
+        ]
+      : [
+          { text: 'Scanning references...', pct: 15 },
+          { text: 'Analyzing Apex classes...', pct: 35 },
+          { text: 'Analyzing Apex triggers...', pct: 55 },
+          { text: 'Analyzing validation rules...', pct: 75 },
+          { text: 'Analyzing field permissions...', pct: 95 }
+        ];
 
     stopScanLoading();
+    let stageIndex = 0;
     state.loadingMessageIndex = 0;
-    el.loadingTextValue.textContent = messages[0];
+    el.loadingTextValue.textContent = stages[0].text;
+    setLoadingProgress(stages[0].pct);
     el.loadingState.classList.remove('hidden');
     state.loadingMessageTimer = setInterval(() => {
-      state.loadingMessageIndex = (state.loadingMessageIndex + 1) % messages.length;
-      el.loadingTextValue.textContent = messages[state.loadingMessageIndex];
-    }, 950);
+      if (stageIndex >= stages.length - 1) {
+        return;
+      }
+      stageIndex += 1;
+      state.loadingMessageIndex = stageIndex;
+      el.loadingTextValue.textContent = stages[stageIndex].text;
+      setLoadingProgress(stages[stageIndex].pct);
+    }, 1100);
   }
 
   function stopScanLoading() {
@@ -593,6 +649,16 @@
       state.loadingMessageTimer = null;
     }
     state.loadingMessageIndex = 0;
+  }
+
+  function setLoadingProgress(value) {
+    const pct = Math.max(0, Math.min(100, Number(value || 0)));
+    if (el.loadingProgressFill) {
+      el.loadingProgressFill.style.width = `${pct}%`;
+    }
+    if (el.loadingPercentValue) {
+      el.loadingPercentValue.textContent = `${Math.round(pct)}%`;
+    }
   }
 
   function showError(message) {
@@ -618,6 +684,28 @@
   function hideAllNotices() {
     hideError();
     hideWarning();
+    hideNonPermissionableBanner();
+  }
+
+  function renderNonPermissionableBanner(result) {
+    if (!el.nonPermissionableBanner) {
+      return;
+    }
+    if (result?.flsFallbackUsed === true) {
+      el.nonPermissionableBanner.textContent =
+        'This field is non-permissionable in Salesforce. Showing object-level permissions fallback.';
+      el.nonPermissionableBanner.classList.remove('hidden');
+      return;
+    }
+    hideNonPermissionableBanner();
+  }
+
+  function hideNonPermissionableBanner() {
+    if (!el.nonPermissionableBanner) {
+      return;
+    }
+    el.nonPermissionableBanner.classList.add('hidden');
+    el.nonPermissionableBanner.textContent = '';
   }
 
   function setRetryState(action, payload) {
@@ -670,6 +758,7 @@
       renderScanResult(result);
       renderFreshness(result);
       renderDiagnostics(result.warnings || []);
+      renderNonPermissionableBanner(result);
       clearRetryState();
     } catch (error) {
       showError(error.message || 'Impact scan failed.');
@@ -1000,6 +1089,11 @@
       counterHtml('Profiles', counters.profile)
     ].join('');
     el.flsControls.classList.remove('hidden');
+    if (el.toggleNoAccessBtn) {
+      const useFallbackToggle = result?.flsFallbackUsed === true;
+      el.toggleNoAccessBtn.classList.toggle('hidden', !useFallbackToggle);
+      syncNoAccessToggleLabel();
+    }
     syncFlsFilterButtons();
   }
 
@@ -1007,21 +1101,32 @@
     if (el.flsControls) {
       el.flsControls.classList.add('hidden');
     }
+    if (el.toggleNoAccessBtn) {
+      el.toggleNoAccessBtn.classList.add('hidden');
+    }
   }
 
-  function filterFlsItems(items, filter) {
+  function filterFlsItems(items, filter, hideNone = false) {
+    const source = hideNone ? items.filter((x) => x.accessType !== 'none') : items;
     switch (filter) {
       case 'profile':
-        return items.filter((x) => x.permissionType === 'profile');
+        return source.filter((x) => x.permissionType === 'profile');
       case 'permissionSet':
-        return items.filter((x) => x.permissionType === 'permissionSet');
+        return source.filter((x) => x.permissionType === 'permissionSet');
       case 'readEdit':
-        return items.filter((x) => x.accessType === 'readEdit');
+        return source.filter((x) => x.accessType === 'readEdit');
       case 'read':
-        return items.filter((x) => x.accessType === 'read');
+        return source.filter((x) => x.accessType === 'read');
       default:
-        return items;
+        return source;
     }
+  }
+
+  function syncNoAccessToggleLabel() {
+    if (!el.toggleNoAccessBtn) {
+      return;
+    }
+    el.toggleNoAccessBtn.textContent = state.showNoAccessInFallback ? 'Hide No Access' : 'Show No Access';
   }
 
   function counterHtml(key, value) {

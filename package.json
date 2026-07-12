@@ -1,0 +1,20 @@
+{
+  "name": "fieldlens-salesforce",
+  "version": "1.1.1",
+  "private": true,
+  "description": "Test scaffold and QA tooling for FieldLens for Salesforce.",
+  "scripts": {
+    "test:unit": "node scripts/unit_tests.js",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:verify-extension:local": "node scripts/verify_extension_launch.js",
+    "test:e2e:verify-extension": "playwright test tests/e2e/verify-extension.spec.js --headed",
+    "test:e2e:welcome": "playwright test tests/e2e/extension-welcome.spec.js --headed",
+    "test:e2e:salesforce": "playwright test tests/e2e/salesforce-headed.spec.js --headed",
+    "test:e2e:isolation": "playwright test tests/e2e/salesforce-isolation.spec.js --headed",
+    "test:security": "node scripts/unit_tests.js && playwright test tests/e2e/salesforce-isolation.spec.js --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2"
+  }
+}

@@ -89,11 +89,75 @@
     return rows;
   }
 
+  function normalizeHostnameFromBaseUrl(baseUrl) {
+    try {
+      return new URL(String(baseUrl || '')).hostname.toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function sanitizeIdentityPart(value, fallbackValue) {
+    var normalized = String(value == null ? '' : value).trim().toLowerCase();
+    normalized = normalized.replace(/[^a-z0-9_.-]/g, '_');
+    return normalized || fallbackValue;
+  }
+
+  function buildIdentityScope(baseUrl, identity) {
+    identity = identity && typeof identity === 'object' ? identity : {};
+    return {
+      hostname: sanitizeIdentityPart(normalizeHostnameFromBaseUrl(baseUrl), 'unknown-host'),
+      instanceKey: sanitizeIdentityPart(identity.instanceKey, 'unknown-instance'),
+      orgId: sanitizeIdentityPart(identity.orgId, 'unknown-org'),
+      userId: sanitizeIdentityPart(identity.userId, 'unknown-user')
+    };
+  }
+
+  function buildScanCacheKey(options) {
+    options = options && typeof options === 'object' ? options : {};
+    var scope = buildIdentityScope(options.baseUrl, options.identity);
+    var objectApiName = sanitizeIdentityPart(options.objectApiName, 'unknown-object');
+    var fieldApiName = sanitizeIdentityPart(options.fieldApiName, 'unknown-field');
+    var scanMode = options.scanMode === 'deep' ? 'deep' : 'quick';
+    var schemaVersion = sanitizeIdentityPart(options.schemaVersion, 'v1');
+    return [
+      'scan',
+      schemaVersion,
+      scope.hostname,
+      scope.instanceKey,
+      scope.orgId,
+      scope.userId,
+      objectApiName,
+      fieldApiName,
+      scanMode
+    ].join(':');
+  }
+
+  function buildFieldCacheKey(options) {
+    options = options && typeof options === 'object' ? options : {};
+    var scope = buildIdentityScope(options.baseUrl, options.identity);
+    var objectApiName = sanitizeIdentityPart(options.objectApiName, 'unknown-object');
+    var schemaVersion = sanitizeIdentityPart(options.schemaVersion, 'v1');
+    return [
+      'fields',
+      schemaVersion,
+      scope.hostname,
+      scope.instanceKey,
+      scope.orgId,
+      scope.userId,
+      objectApiName
+    ].join(':');
+  }
+
   return {
     parseSalesforceContext: parseSalesforceContext,
     normalizeSettings: normalizeSettings,
     shouldShowGroup: shouldShowGroup,
     csvEscape: csvEscape,
-    buildImpactCsvRows: buildImpactCsvRows
+    buildImpactCsvRows: buildImpactCsvRows,
+    normalizeHostnameFromBaseUrl: normalizeHostnameFromBaseUrl,
+    buildIdentityScope: buildIdentityScope,
+    buildScanCacheKey: buildScanCacheKey,
+    buildFieldCacheKey: buildFieldCacheKey
   };
 });

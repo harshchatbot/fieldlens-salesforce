@@ -170,12 +170,7 @@
       });
       return parseToolingResponse(res);
     } catch (error) {
-      const fallback = await proxyViaPageContext(urlString).catch((pageError) => ({
-        ok: false,
-        status: 0,
-        error: `Failed to fetch (content=${error?.message || 'unknown'}; page=${pageError?.message || 'unknown'})`
-      }));
-      return fallback;
+      return { ok: false, status: 0, error: error?.message || 'Failed to fetch' };
     }
   }
 
@@ -269,6 +264,13 @@
           };
       await chrome.storage.local.set({ fieldlensSettings: normalized });
       return normalized;
+    }
+
+    if (action === 'clearCache') {
+      return sendToBackground({
+        type: 'FIELDLENS_CLEAR_CACHE',
+        baseUrl: location.origin
+      });
     }
 
     throw createError('UNKNOWN_ACTION', `Unknown panel action: ${action}`);

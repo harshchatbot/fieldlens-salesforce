@@ -167,6 +167,12 @@ body {
   border: 1px solid #ffd48a;
 }
 
+.nonperm-banner {
+  background: #ecf9e9;
+  color: #1e6116;
+  border: 1px solid #bfe6b8;
+}
+
 .retry-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -238,6 +244,12 @@ body {
 
 .field-picker input {
   margin-bottom: 8px;
+}
+
+.field-picker-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #5f7488;
 }
 
 .field-picker select {
@@ -375,6 +387,23 @@ body {
   font-weight: 500;
 }
 
+.settings-actions {
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-actions .secondary-btn {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.settings-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: #5f7488;
+}
+
 .loading {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -382,9 +411,9 @@ body {
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
-  border: 1px solid #d7e6f4;
+  border: 1px solid #cfe8cf;
   border-radius: 12px;
-  background: #f5faff;
+  background: #f3fbf1;
   padding: 10px;
 }
 
@@ -394,14 +423,14 @@ body {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at 30% 30%, #dff0ff, #eff7ff);
+  background: radial-gradient(circle at 30% 30%, #dff5df, #eef9ee);
 }
 
 .spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid #bcd4ea;
-  border-top-color: var(--brand);
+  border: 2px solid #bfe4bf;
+  border-top-color: #2f9c22;
   border-radius: 50%;
   animation: spin 700ms linear infinite;
 }
@@ -410,6 +439,29 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.loading-progress {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: #dff0dc;
+  border: 1px solid #c8e5c4;
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #66bb5a, #2f9c22);
+  transition: width 360ms ease;
+}
+
+.loading-percent {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2b6f21;
 }
 
 .loading-bars {
@@ -421,7 +473,7 @@ body {
   display: block;
   height: 4px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #b9d9f5, #4a9ed9);
+  background: linear-gradient(90deg, #bfe7b8, #2f9c22);
   animation: pulse 1.1s ease-in-out infinite;
 }
 

@@ -28,6 +28,7 @@
         <button id="retryScanBtn" class="secondary-btn retry-btn hidden" type="button">Retry Scan</button>
       </section>
       <section id="warningBanner" class="warning-banner hidden"></section>
+      <section id="nonPermissionableBanner" class="warning-banner nonperm-banner hidden"></section>
       <section id="diagnosticsSection" class="diagnostics hidden">
         <details id="diagnosticsDetails">
           <summary>Diagnostics <span id="diagnosticsCount" class="diagnostics-count">0</span></summary>
@@ -38,14 +39,31 @@
       <section id="recordFieldPicker" class="field-picker hidden">
         <label for="fieldSearchInput">Select field</label>
         <input id="fieldSearchInput" type="text" placeholder="Search by label or API name" autocomplete="off" />
+        <p class="field-picker-note">Fields marked with [NP] are non-permissionable (no FieldPermissions rows in Salesforce).</p>
         <select id="fieldSelect" size="10"></select>
       </section>
 
       <section class="scan-mode">
         <span class="mode-label">Scan Mode</span>
         <div class="mode-toggle" role="radiogroup" aria-label="Scan mode">
-          <button id="modeQuickBtn" type="button" class="mode-btn mode-btn-active" aria-pressed="true">Quick</button>
-          <button id="modeDeepBtn" type="button" class="mode-btn" aria-pressed="false">Deep</button>
+          <button
+            id="modeQuickBtn"
+            type="button"
+            class="mode-btn mode-btn-active"
+            aria-pressed="true"
+            title="Quick: scans Validation Rules, Apex Classes, Apex Triggers, Flows, and FLS/Permissions."
+          >
+            Quick
+          </button>
+          <button
+            id="modeDeepBtn"
+            type="button"
+            class="mode-btn"
+            aria-pressed="false"
+            title="Deep: includes Quick scan plus Formula Fields, Page Layouts, List Views, and Report Types."
+          >
+            Deep
+          </button>
         </div>
       </section>
 
@@ -69,6 +87,10 @@
           <input id="hideZeroGroupsCheckbox" type="checkbox" />
           <span>Hide zero-result sections</span>
         </label>
+        <div class="settings-row settings-actions">
+          <button id="clearCacheBtn" class="secondary-btn" type="button">Clear Org Cache</button>
+          <span class="settings-hint">Force fresh metadata on next load/scan.</span>
+        </div>
       </section>
 
       <section id="resultSearchWrap" class="result-search hidden">
@@ -85,6 +107,10 @@
         </div>
         <div class="loading-text">
           <span id="loadingTextValue">Scanning references...</span>
+          <div class="loading-progress" aria-hidden="true">
+            <div id="loadingProgressFill" class="loading-progress-fill"></div>
+          </div>
+          <span id="loadingPercentValue" class="loading-percent">0%</span>
           <div class="loading-bars" aria-hidden="true">
             <span></span>
             <span></span>
@@ -111,6 +137,9 @@
           <button type="button" class="fls-filter-btn" data-fls-filter="permissionSet">Perm Sets</button>
           <button type="button" class="fls-filter-btn" data-fls-filter="readEdit">Read + Edit</button>
           <button type="button" class="fls-filter-btn" data-fls-filter="read">Read only</button>
+        </div>
+        <div class="fls-filter-row">
+          <button id="toggleNoAccessBtn" type="button" class="fls-filter-btn hidden">Show No Access</button>
         </div>
       </section>
 

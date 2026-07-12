@@ -1,9 +1,15 @@
+importScripts('shared/fieldlens_core.js');
+
 const API_VERSION = 'v60.0';
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_SCHEMA_VERSION = 'v8';
+const IDENTITY_CACHE_TTL_MS = 60 * 1000;
+
+const core = globalThis.FieldLensCore || {};
 
 const inFlightScans = new Map();
 const inFlightFieldLoads = new Map();
+const identityCache = new Map();
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
@@ -44,6 +50,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'FIELDLENS_CLEAR_CACHE') {
+    handleClearCache(message)
+      .then((data) => sendResponse({ ok: true, data }))
+      .catch((error) => sendResponse({ ok: false, error: toClientError(error) }));
+    return true;
+  }
+
   return false;
 });
 
@@ -53,19 +66,115 @@ async function openExistingSalesforceTabOrLogin() {
     'https://*.my.salesforce.com/*',
     'https://*.salesforce.com/*'
   ];
-  const tabs = await chrome.tabs.query({ url: patterns });
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: patterns });
+  } catch (_) {
+    tabs = [];
+  }
 
-  const pick = tabs.find((tab) => /\/lightning\//i.test(tab.url || '')) || tabs[0];
+  // Fallback: enumerate all tabs and match URL manually in case pattern query is constrained.
+  if (!tabs.length) {
+    try {
+      const allTabs = await chrome.tabs.query({});
+      tabs = allTabs.filter((tab) => isSalesforceTab(tab));
+    } catch (_) {
+      tabs = [];
+    }
+  }
+  if (!tabs.length) {
+    try {
+      const wins = await chrome.windows.getAll({ populate: true });
+      const fromWindows = [];
+      for (const win of wins || []) {
+        for (const tab of win.tabs || []) {
+          if (isSalesforceTab(tab)) {
+            fromWindows.push(tab);
+          }
+        }
+      }
+      tabs = fromWindows;
+    } catch (_) {
+      tabs = [];
+    }
+  }
+
+  const pick = pickBestSalesforceTab(tabs);
   if (pick && Number.isInteger(pick.id)) {
-    await chrome.tabs.update(pick.id, { active: true });
+    try {
+      await chrome.tabs.update(pick.id, { active: true });
+    } catch (_) {
+      // keep going; window focus may still bring tab forward
+    }
     if (Number.isInteger(pick.windowId)) {
-      await chrome.windows.update(pick.windowId, { focused: true });
+      try {
+        await chrome.windows.update(pick.windowId, { focused: true });
+      } catch (_) {
+        // ignore focus failures and continue
+      }
     }
     return { mode: 'existing_tab', tabId: pick.id, url: pick.url || null };
   }
 
   const created = await chrome.tabs.create({ url: 'https://login.salesforce.com' });
   return { mode: 'new_login_tab', tabId: created?.id || null, url: created?.url || null };
+}
+
+function isSalesforceTabUrl(url) {
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) {
+    return false;
+  }
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return (
+      hostname.endsWith('.lightning.force.com') ||
+      hostname.endsWith('.my.salesforce.com') ||
+      hostname.endsWith('.salesforce.com')
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+function isSalesforceTab(tab) {
+  if (!tab || typeof tab !== 'object') {
+    return false;
+  }
+  if (isSalesforceTabUrl(tab.url)) {
+    return true;
+  }
+  const title = String(tab.title || '').toLowerCase();
+  const pendingUrl = String(tab.pendingUrl || '').toLowerCase();
+  if (/salesforce/.test(title) && /^https:\/\//.test(pendingUrl)) {
+    return true;
+  }
+  return false;
+}
+
+function pickBestSalesforceTab(tabs) {
+  if (!Array.isArray(tabs) || !tabs.length) {
+    return null;
+  }
+  const scoreUrl = (url) => {
+    const u = String(url || '').toLowerCase();
+    if (!u) return 0;
+    if (u.includes('/lightning/')) return 4;
+    if (u.includes('/one/one.app')) return 3;
+    if (u.includes('/setup/')) return 2;
+    if (u.includes('login.salesforce.com')) return 1;
+    return 1;
+  };
+  const sorted = [...tabs].sort((a, b) => {
+    if (!!b.active !== !!a.active) {
+      return b.active ? 1 : -1;
+    }
+    const s = scoreUrl(b.url) - scoreUrl(a.url);
+    if (s !== 0) {
+      return s;
+    }
+    return 0;
+  });
+  return sorted[0] || null;
 }
 
 async function handleScanImpact(message, tabId) {
@@ -76,8 +185,9 @@ async function handleScanImpact(message, tabId) {
     throw createError('INVALID_INPUT', 'Missing object or field context for scan.');
   }
 
-  const scanKey = `scan:${CACHE_SCHEMA_VERSION}:${new URL(baseUrl).hostname}:${objectApiName}:${fieldApiName}:${scanMode}`;
-  // Cache by org host + object + field for 10 minutes.
+  const identity = await resolveIdentityScope(baseUrl, tabId);
+  const scanKey = buildScopedScanCacheKey(baseUrl, objectApiName, fieldApiName, scanMode, identity);
+  // Cache by host + org + user + object + field for 10 minutes.
   const cached = await getCached(scanKey);
   if (cached) {
     return { ...cached, fromCache: true };
@@ -96,14 +206,12 @@ async function handleScanImpact(message, tabId) {
     const apexClassSoql = `SELECT Id, Name, Body FROM ApexClass ORDER BY Name`;
     const apexTriggerSoql = `SELECT Id, Name, TableEnumOrId, Body FROM ApexTrigger ORDER BY Name`;
     const validationSoql = `SELECT Id, ValidationName, Active, EntityDefinitionId, ErrorConditionFormula FROM ValidationRule ORDER BY ValidationName`;
-    const flsSoql = `SELECT Id, ParentId, PermissionsRead, PermissionsEdit, SobjectType, Field, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.ProfileId, Parent.Profile.Name FROM FieldPermissions WHERE SobjectType = '${escapedObjectForSoql}' AND Field = '${escapedFullFieldForSoql}' ORDER BY Parent.Label`;
-
     const [classesRes, triggersRes, validationRes, flowsRes, flsRes, formulaRes, layoutRes, listViewRes, reportTypeRes] = await Promise.allSettled([
       runToolingQuery(baseUrl, apexClassSoql, tabId),
       runToolingQuery(baseUrl, apexTriggerSoql, tabId),
       runValidationRuleBestEffort(baseUrl, validationSoql, fieldApiName, tabId, isDeep),
       isDeep ? runFlowBestEffortQuery(baseUrl, escapedField, tabId) : Promise.resolve([]),
-      runDataQuery(baseUrl, flsSoql, tabId),
+      runFieldPermissionsBestEffortQuery(baseUrl, objectApiName, fullFieldName, tabId),
       isDeep ? runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
       isDeep ? runPageLayoutBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
       isDeep ? runListViewBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
@@ -142,37 +250,52 @@ async function handleScanImpact(message, tabId) {
       subtitle: item.Status ? `Status: ${item.Status}` : 'Flow',
       url: `${baseUrl}/lightning/setup/Flows/page?address=%2F${item.Id}`
     }));
-    const flsItems = flsRes.status === 'fulfilled' ? flsRes.value : [];
-    const parentDetailsById = await loadPermissionParentDetails(baseUrl, flsItems, tabId);
-    const fieldPermissions = flsItems.map((item) => {
-      const parentId = item.ParentId || item.Id;
-      const detail = parentDetailsById.get(parentId) || null;
-      const isProfile = detail ? !!detail.isOwnedByProfile : !!item.Parent?.IsOwnedByProfile;
-      const access = item.PermissionsEdit ? 'Read + Edit' : item.PermissionsRead ? 'Read' : 'No Access';
-      const profileName = detail?.profileName || item.Parent?.Profile?.Name || null;
-      const profileId = detail?.profileId || item.Parent?.ProfileId || null;
-      const displayName =
-        profileName ||
-        detail?.label ||
-        item.Parent?.Label ||
-        detail?.name ||
-        item.Parent?.Label ||
-        item.Parent?.Name ||
-        (looksLikeSalesforceId(parentId) ? 'Unknown Permission Container' : parentId);
-      const url = isProfile
-        ? profileId
-          ? `${baseUrl}/lightning/setup/EnhancedProfiles/page?address=%2F${profileId}`
-          : `${baseUrl}/lightning/setup/EnhancedProfiles/home`
-        : `${baseUrl}/lightning/setup/PermSets/page?address=%2F${parentId}`;
-      return {
-        id: item.Id,
-        name: displayName,
-        subtitle: `${isProfile ? 'Profile' : 'Permission Set'} - ${access}`,
-        url,
-        permissionType: isProfile ? 'profile' : 'permissionSet',
-        accessType: item.PermissionsEdit ? 'readEdit' : item.PermissionsRead ? 'read' : 'none'
-      };
-    });
+    let flsItems = flsRes.status === 'fulfilled' ? flsRes.value : [];
+    let flsFallbackWarning = null;
+    let flsFallbackUsed = false;
+    let fieldPermissions = [];
+    if (!flsItems.length) {
+      const fallback = await runObjectPermissionFallbackForNonFlsField(baseUrl, objectApiName, fieldApiName, tabId);
+      if (Array.isArray(fallback?.records) && fallback.records.length) {
+        fieldPermissions = fallback.records;
+        flsFallbackUsed = true;
+        flsFallbackWarning = fallback.warning || null;
+      }
+    }
+    if (!flsFallbackUsed) {
+      const parentDetailsById = await loadPermissionParentDetails(baseUrl, flsItems, tabId);
+      fieldPermissions = flsItems.map((item) => {
+        const parentId = item.ParentId || null;
+        const detail = parentDetailsById.get(parentId) || null;
+        const isProfile = detail ? !!detail.isOwnedByProfile : !!item.Parent?.IsOwnedByProfile;
+        const access = item.PermissionsEdit ? 'Read + Edit' : item.PermissionsRead ? 'Read' : 'No Access';
+        const profileName = detail?.profileName || item.Parent?.Profile?.Name || null;
+        const profileId = detail?.profileId || item.Parent?.ProfileId || null;
+        const displayName =
+          profileName ||
+          detail?.label ||
+          item.Parent?.Label ||
+          detail?.name ||
+          item.Parent?.Name ||
+          (looksLikeSalesforceId(parentId) ? parentId : null) ||
+          'Unknown Permission Container';
+        const url = isProfile
+          ? profileId
+            ? `${baseUrl}/lightning/setup/EnhancedProfiles/page?address=%2F${profileId}`
+            : `${baseUrl}/lightning/setup/EnhancedProfiles/home`
+          : parentId
+            ? `${baseUrl}/lightning/setup/PermSets/page?address=%2F${parentId}`
+            : `${baseUrl}/lightning/setup/PermSets/home`;
+        return {
+          id: item.Id,
+          name: displayName,
+          subtitle: `${isProfile ? 'Profile' : 'Permission Set'} - ${access}`,
+          url,
+          permissionType: isProfile ? 'profile' : 'permissionSet',
+          accessType: item.PermissionsEdit ? 'readEdit' : item.PermissionsRead ? 'read' : 'none'
+        };
+      });
+    }
     const formulaItems = formulaRes.status === 'fulfilled' ? formulaRes.value : [];
     const formulaFields = formulaItems.map((item) => ({
       id: item.Id,
@@ -211,7 +334,8 @@ async function handleScanImpact(message, tabId) {
       warnings.push(validationRes.value.warning);
     }
     if (isDeep && flowsRes.status === 'rejected') warnings.push(flowsRes.reason.message);
-    if (flsRes.status === 'rejected') warnings.push('FLS scan unavailable for this user/org permissions.');
+    if (flsRes.status === 'rejected') warnings.push(flsRes.reason?.message || 'FLS scan unavailable for this user/org permissions.');
+    if (flsFallbackWarning) warnings.push(flsFallbackWarning);
     if (isDeep && formulaRes.status === 'rejected') warnings.push(formulaRes.reason.message);
     if (isDeep && layoutRes.status === 'rejected') warnings.push(layoutRes.reason.message);
     if (isDeep && listViewRes.status === 'rejected') warnings.push(listViewRes.reason.message);
@@ -254,6 +378,7 @@ async function handleScanImpact(message, tabId) {
         reportTypes
       },
       warnings,
+      flsFallbackUsed,
       generatedAt: Date.now(),
       fromCache: false
     };
@@ -276,7 +401,8 @@ async function handleLoadFields(message, tabId) {
     throw createError('INVALID_INPUT', 'Missing object context for field list loading.');
   }
 
-  const fieldKey = `fields:${CACHE_SCHEMA_VERSION}:${new URL(baseUrl).hostname}:${objectApiName}`;
+  const identity = await resolveIdentityScope(baseUrl, tabId);
+  const fieldKey = buildScopedFieldCacheKey(baseUrl, objectApiName, identity);
   const cached = await getCached(fieldKey);
   if (cached) {
     return { ...cached, fromCache: true };
@@ -290,12 +416,25 @@ async function handleLoadFields(message, tabId) {
     const escapedObject = escapeSoqlValue(objectApiName);
     const soql = `SELECT DurableId, QualifiedApiName, Label, DataType FROM FieldDefinition WHERE EntityDefinition.QualifiedApiName = '${escapedObject}' ORDER BY Label`;
     const records = await runToolingQuery(baseUrl, soql, tabId);
+    let permissionableByApiName = new Map();
+    try {
+      const describe = await runSObjectDescribe(baseUrl, objectApiName, tabId);
+      const describeFields = Array.isArray(describe?.fields) ? describe.fields : [];
+      permissionableByApiName = new Map(
+        describeFields.map((f) => [String(f?.name || '').toLowerCase(), f?.permissionable !== false])
+      );
+    } catch (_) {
+      // best-effort only; leave permissionability unknown
+    }
 
     const fields = records.map((record) => ({
       durableId: record.DurableId,
       apiName: record.QualifiedApiName,
       label: record.Label || record.QualifiedApiName,
-      dataType: record.DataType || 'Unknown'
+      dataType: record.DataType || 'Unknown',
+      isPermissionable: permissionableByApiName.has(String(record.QualifiedApiName || '').toLowerCase())
+        ? permissionableByApiName.get(String(record.QualifiedApiName || '').toLowerCase())
+        : null
     }));
 
     const payload = {
@@ -809,6 +948,130 @@ async function runReportTypeBestEffortQuery(baseUrl, objectApiName, fieldApiName
   return [];
 }
 
+async function runFieldPermissionsBestEffortQuery(baseUrl, objectApiName, fullFieldName, tabId) {
+  const escapedObject = escapeSoqlValue(objectApiName);
+  const escapedFullField = escapeSoqlValue(fullFieldName);
+
+  const candidates = [
+    `SELECT Id, ParentId, PermissionsRead, PermissionsEdit, SobjectType, Field, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.ProfileId, Parent.Profile.Name FROM FieldPermissions WHERE SobjectType = '${escapedObject}' AND Field = '${escapedFullField}' ORDER BY Parent.Label`,
+    `SELECT Id, ParentId, PermissionsRead, PermissionsEdit, SobjectType, Field, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.ProfileId FROM FieldPermissions WHERE SobjectType = '${escapedObject}' AND Field = '${escapedFullField}' ORDER BY Parent.Label`,
+    `SELECT Id, ParentId, PermissionsRead, PermissionsEdit, SobjectType, Field FROM FieldPermissions WHERE SobjectType = '${escapedObject}' AND Field = '${escapedFullField}' ORDER BY ParentId`
+  ];
+
+  let lastError = null;
+  for (const soql of candidates) {
+    try {
+      return await runDataQuery(baseUrl, soql, tabId);
+    } catch (error) {
+      lastError = error;
+      if (isPermissionError(error)) {
+        throw createError('FLS_SCAN_UNAVAILABLE', 'FLS scan unavailable for this user/org permissions.');
+      }
+    }
+  }
+
+  throw createError(
+    'FLS_SCAN_UNAVAILABLE',
+    lastError?.message || 'FLS scan unavailable in this org/API shape.'
+  );
+}
+
+async function runObjectPermissionFallbackForNonFlsField(baseUrl, objectApiName, fieldApiName, tabId) {
+  const describe = await runSObjectDescribe(baseUrl, objectApiName, tabId);
+  const fields = Array.isArray(describe?.fields) ? describe.fields : [];
+  const match = fields.find((f) => String(f?.name || '').toLowerCase() === String(fieldApiName || '').toLowerCase());
+  if (!match || match.permissionable !== false) {
+    return { records: [], warning: null };
+  }
+
+  const escapedObject = escapeSoqlValue(objectApiName);
+  const candidates = [
+    `SELECT Id, ParentId, PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, SObjectType, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.ProfileId, Parent.Profile.Name FROM ObjectPermissions WHERE SObjectType = '${escapedObject}' ORDER BY Parent.Label`,
+    `SELECT Id, ParentId, PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, SObjectType, Parent.Label, Parent.Name, Parent.IsOwnedByProfile, Parent.ProfileId FROM ObjectPermissions WHERE SObjectType = '${escapedObject}' ORDER BY Parent.Label`,
+    `SELECT Id, ParentId, PermissionsRead, PermissionsCreate, PermissionsEdit, PermissionsDelete, PermissionsViewAllRecords, PermissionsModifyAllRecords, SObjectType FROM ObjectPermissions WHERE SObjectType = '${escapedObject}' ORDER BY ParentId`
+  ];
+
+  let rows = [];
+  let lastError = null;
+  for (const soql of candidates) {
+    try {
+      rows = await runDataQuery(baseUrl, soql, tabId);
+      break;
+    } catch (error) {
+      lastError = error;
+      if (isPermissionError(error)) {
+        break;
+      }
+    }
+  }
+  if (!rows.length) {
+    if (lastError) {
+      return { records: [], warning: `No FLS rows found and object-permission fallback failed for ${objectApiName}.${fieldApiName}.` };
+    }
+    return { records: [], warning: null };
+  }
+
+  const parentDetailsById = await loadPermissionParentDetails(baseUrl, rows, tabId);
+  const mapped = rows.map((item) => {
+    const parentId = item.ParentId || null;
+    const detail = parentDetailsById.get(parentId) || null;
+    const isProfile = detail ? !!detail.isOwnedByProfile : !!item.Parent?.IsOwnedByProfile;
+    const profileName = detail?.profileName || item.Parent?.Profile?.Name || null;
+    const profileId = detail?.profileId || item.Parent?.ProfileId || null;
+    const displayName =
+      profileName ||
+      detail?.label ||
+      item.Parent?.Label ||
+      detail?.name ||
+      item.Parent?.Name ||
+      (looksLikeSalesforceId(parentId) ? parentId : null) ||
+      'Unknown Permission Container';
+    const canRead = !!item.PermissionsRead;
+    const canEdit = !!item.PermissionsEdit;
+    const canCreate = !!item.PermissionsCreate;
+    const canDelete = !!item.PermissionsDelete;
+    const canViewAll = !!item.PermissionsViewAllRecords;
+    const canModifyAll = !!item.PermissionsModifyAllRecords;
+    let access = 'No Access';
+    if (canModifyAll) {
+      access = 'Modify All';
+    } else if (canViewAll) {
+      access = 'View All';
+    } else if (canEdit && canRead) {
+      access = 'Read + Edit';
+    } else if (canRead) {
+      access = 'Read';
+    } else if (canCreate && canDelete) {
+      access = 'Create + Delete';
+    } else if (canCreate) {
+      access = 'Create';
+    } else if (canDelete) {
+      access = 'Delete';
+    }
+
+    const url = isProfile
+      ? profileId
+        ? `${baseUrl}/lightning/setup/EnhancedProfiles/page?address=%2F${profileId}`
+        : `${baseUrl}/lightning/setup/EnhancedProfiles/home`
+      : parentId
+        ? `${baseUrl}/lightning/setup/PermSets/page?address=%2F${parentId}`
+        : `${baseUrl}/lightning/setup/PermSets/home`;
+    return {
+      id: item.Id,
+      name: displayName,
+      subtitle: `${isProfile ? 'Profile' : 'Permission Set'} - ${access} (Object-level fallback)`,
+      url,
+      permissionType: isProfile ? 'profile' : 'permissionSet',
+      accessType: canEdit ? 'readEdit' : canRead ? 'read' : 'none'
+    };
+  });
+
+  return {
+    records: mapped,
+    warning: `${objectApiName}.${fieldApiName} is not FLS-permissionable in this org shape; showing object-level permissions instead.`
+  };
+}
+
 async function runToolingQuery(baseUrl, soql, tabId) {
   const queryPath = `/services/data/${API_VERSION}/tooling/query/?q=${encodeURIComponent(soql)}`;
   const candidates = buildApiBaseCandidates(baseUrl);
@@ -913,26 +1176,35 @@ async function runPaginatedQueryForBase(apiBase, initialPath, tabId) {
 
 function buildApiBaseCandidates(baseUrl) {
   const base = new URL(baseUrl);
-  const candidates = [];
-  const host = base.hostname;
+  // Keep API requests on the current Lightning tab origin.
+  // This avoids cross-origin browser CORS behavior that can require Salesforce CORS allowlist entries.
+  return [base.origin];
+}
 
-  if (host.includes('.lightning.force.com')) {
-    const myDomainHost = host.replace('.lightning.force.com', '.my.salesforce.com');
-    // Prefer my.salesforce.com first for API calls in Lightning orgs.
-    candidates.push(`${base.protocol}//${myDomainHost}`);
-    candidates.push(base.origin);
-    return [...new Set(candidates)];
+function buildScopedScanCacheKey(baseUrl, objectApiName, fieldApiName, scanMode, identity) {
+  if (core && typeof core.buildScanCacheKey === 'function') {
+    return core.buildScanCacheKey({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      baseUrl,
+      identity,
+      objectApiName,
+      fieldApiName,
+      scanMode
+    });
   }
+  return `scan:${CACHE_SCHEMA_VERSION}:${new URL(baseUrl).hostname}:${objectApiName}:${fieldApiName}:${scanMode}`;
+}
 
-  candidates.push(base.origin);
-  if (host.endsWith('.force.com') && !host.includes('.my.salesforce.com') && !host.includes('.lightning.force.com')) {
-    const alt = host.replace('.force.com', '.my.salesforce.com');
-    if (alt !== host) {
-      candidates.push(`${base.protocol}//${alt}`);
-    }
+function buildScopedFieldCacheKey(baseUrl, objectApiName, identity) {
+  if (core && typeof core.buildFieldCacheKey === 'function') {
+    return core.buildFieldCacheKey({
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      baseUrl,
+      identity,
+      objectApiName
+    });
   }
-
-  return [...new Set(candidates)];
+  return `fields:${CACHE_SCHEMA_VERSION}:${new URL(baseUrl).hostname}:${objectApiName}`;
 }
 
 function isPermissionError(error) {
@@ -1077,6 +1349,7 @@ async function fetchSalesforceJson(baseUrl, url, tabId) {
   }
 
   const shouldRetryWithSid =
+    proxy?.status === 401 ||
     proxy?.status === 0 ||
     /failed to fetch/i.test(proxy?.error || '') ||
     /cross-origin blocked/i.test(proxy?.error || '');
@@ -1122,49 +1395,135 @@ async function fetchSalesforceJson(baseUrl, url, tabId) {
   });
 }
 
-async function fetchSalesforceJsonWithSid(urlString) {
-  const sid = await findSidForUrl(urlString);
-  if (!sid) {
-    throw createError('NOT_LOGGED_IN', 'Salesforce session cookie is not available.');
+async function resolveIdentityScope(baseUrl, tabId) {
+  const origin = new URL(baseUrl).origin;
+  const cached = identityCache.get(origin);
+  if (cached && Date.now() - cached.cachedAt < IDENTITY_CACHE_TTL_MS) {
+    return cached.value;
   }
 
-  let res;
-  try {
-    res = await fetch(urlString, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${sid}`
-      }
-    });
-  } catch (error) {
-    throw createError('NETWORK_ERROR', error?.message || 'Failed to fetch with session cookie.');
-  }
+  const hostname =
+    core && typeof core.normalizeHostnameFromBaseUrl === 'function'
+      ? core.normalizeHostnameFromBaseUrl(baseUrl)
+      : new URL(baseUrl).hostname.toLowerCase();
 
-  const text = await res.text();
-  const contentType = res.headers.get('content-type') || '';
-  let data = null;
+  const identity = {
+    hostname,
+    instanceKey: hostname,
+    orgId: 'unknown-org',
+    userId: 'unknown-user'
+  };
+
   try {
-    data = JSON.parse(text);
+    const meUrl = `${origin}/services/data/${API_VERSION}/chatter/users/me`;
+    const meResult = await fetchSalesforceJson(baseUrl, meUrl, Number.isInteger(tabId) ? tabId : null);
+    if (meResult && meResult.status >= 200 && meResult.status < 300 && meResult.data) {
+      identity.userId = meResult.data.id || meResult.data.userId || identity.userId;
+    }
   } catch (_) {
-    data = null;
+    // Best-effort only. Host scoping still isolates environments if user lookup is unavailable.
   }
 
-  if (res.status === 401) {
-    throw createError('NOT_LOGGED_IN', 'Salesforce session is not available. Please log in again.');
-  }
-  if (res.status === 403) {
-    throw createError('INSUFFICIENT_PERMISSIONS', 'Tooling API access denied for this user.');
-  }
-  if (!res.ok) {
-    const sfMessage = extractSalesforceErrorMessage(data) || text || `Salesforce API failed with status ${res.status}.`;
-    throw createError('API_ERROR', sfMessage);
-  }
-  if (!contentType.includes('application/json') || data === null) {
-    throw createError('NOT_LOGGED_IN', 'Salesforce returned a non-JSON response. Please log in and refresh.');
+  try {
+    const orgRecords = await runDataQuery(baseUrl, 'SELECT Id, InstanceName FROM Organization LIMIT 1', tabId);
+    const org = Array.isArray(orgRecords) ? orgRecords[0] : null;
+    if (org?.Id) {
+      identity.orgId = org.Id;
+    }
+    if (org?.InstanceName) {
+      identity.instanceKey = org.InstanceName;
+    }
+  } catch (_) {
+    // Best-effort only. Host scoping still isolates environments if org lookup is unavailable.
   }
 
-  return { status: res.status, data };
+  identityCache.set(origin, {
+    cachedAt: Date.now(),
+    value: identity
+  });
+
+  return identity;
+}
+
+async function fetchSalesforceJsonWithSid(urlString) {
+  const candidates = buildApiUrlCandidates(urlString);
+  let lastError = null;
+
+  for (const candidateUrl of candidates) {
+    const sid = await findSidForUrl(candidateUrl);
+    if (!sid) {
+      lastError = createError('NOT_LOGGED_IN', 'Salesforce session cookie is not available.');
+      continue;
+    }
+
+    let res;
+    try {
+      res = await fetch(candidateUrl, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${sid}`
+        }
+      });
+    } catch (error) {
+      lastError = createError('NETWORK_ERROR', error?.message || 'Failed to fetch with session cookie.');
+      continue;
+    }
+
+    const text = await res.text();
+    const contentType = res.headers.get('content-type') || '';
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      data = null;
+    }
+
+    if (res.status === 401) {
+      lastError = createError('NOT_LOGGED_IN', 'Salesforce session is not available. Please log in again.');
+      continue;
+    }
+    if (res.status === 403) {
+      throw createError('INSUFFICIENT_PERMISSIONS', 'Tooling API access denied for this user.');
+    }
+    if (!res.ok) {
+      const sfMessage = extractSalesforceErrorMessage(data) || text || `Salesforce API failed with status ${res.status}.`;
+      lastError = createError('API_ERROR', sfMessage);
+      continue;
+    }
+    if (!contentType.includes('application/json') || data === null) {
+      lastError = createError('NOT_LOGGED_IN', 'Salesforce returned a non-JSON response. Please log in and refresh.');
+      continue;
+    }
+
+    return { status: res.status, data };
+  }
+
+  throw lastError || createError('NOT_LOGGED_IN', 'Salesforce session is not available. Please log in again.');
+}
+
+function buildApiUrlCandidates(urlString) {
+  let parsed;
+  try {
+    parsed = new URL(urlString);
+  } catch (_) {
+    return [urlString];
+  }
+
+  const out = [parsed.toString()];
+  const host = parsed.hostname;
+  if (host.includes('.lightning.force.com')) {
+    const alt = host.replace('.lightning.force.com', '.my.salesforce.com');
+    const u = new URL(parsed.toString());
+    u.hostname = alt;
+    out.push(u.toString());
+  } else if (host.includes('.my.salesforce.com')) {
+    const alt = host.replace('.my.salesforce.com', '.lightning.force.com');
+    const u = new URL(parsed.toString());
+    u.hostname = alt;
+    out.push(u.toString());
+  }
+  return [...new Set(out)];
 }
 
 async function findSidForUrl(urlString) {
@@ -1208,62 +1567,6 @@ async function forwardToolingQueryToTab(url, preferredTabId = null) {
 async function sendToolingQueryToTab(tabId, url) {
   // Helper: send message once
   async function _send() {
-    try {
-      const injected = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: async (targetUrl) => {
-          try {
-            const parsedUrl = new URL(targetUrl, window.location.origin);
-            if (parsedUrl.origin !== window.location.origin) {
-              return { ok: false, status: 0, error: `Cross-origin blocked in main-world fetch: ${parsedUrl.origin}` };
-            }
-            const res = await fetch(parsedUrl.toString(), {
-              method: 'GET',
-              credentials: 'include',
-              headers: { Accept: 'application/json' }
-            });
-            const text = await res.text();
-            const contentType = res.headers.get('content-type') || '';
-            let json = null;
-            try {
-              json = JSON.parse(text);
-            } catch (_) {
-              json = null;
-            }
-            if (json !== null) {
-              if (res.ok) {
-                return { ok: true, status: res.status, data: json };
-              }
-              return {
-                ok: false,
-                status: res.status,
-                statusText: res.statusText,
-                body: json,
-                contentType
-              };
-            }
-            return {
-              ok: false,
-              status: res.status,
-              statusText: res.statusText,
-              body: text,
-              contentType
-            };
-          } catch (error) {
-            return { ok: false, status: 0, error: error?.message || 'Main-world fetch failed' };
-          }
-        },
-        args: [url]
-      });
-      const first = Array.isArray(injected) && injected[0] ? injected[0].result : null;
-      if (first) {
-        return first;
-      }
-    } catch (_) {
-      // fall through to content script messaging fallback
-    }
-
     return await chrome.tabs.sendMessage(tabId, {
       type: 'FIELDLENS_TOOLING_QUERY',
       url
@@ -1366,4 +1669,42 @@ async function setCached(key, payload) {
       payload
     }
   });
+}
+
+async function handleClearCache(message) {
+  const baseUrl = typeof message?.baseUrl === 'string' ? message.baseUrl : null;
+  let host = null;
+  if (baseUrl) {
+    try {
+      host = new URL(baseUrl).hostname;
+    } catch (_) {
+      host = null;
+    }
+  }
+
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all || {});
+  const cacheKeys = keys.filter((key) => {
+    if (!(key.startsWith('scan:') || key.startsWith('fields:'))) {
+      return false;
+    }
+    if (!host) {
+      return true;
+    }
+    return key.includes(`:${host}:`);
+  });
+
+  if (cacheKeys.length) {
+    await chrome.storage.local.remove(cacheKeys);
+  }
+
+  // Prevent in-memory dedupe maps from reusing old promises.
+  inFlightScans.clear();
+  inFlightFieldLoads.clear();
+  identityCache.clear();
+
+  return {
+    removed: cacheKeys.length,
+    scope: host ? `org:${host}` : 'all'
+  };
 }

@@ -19,3 +19,10 @@ extension.pem
 # Reports generated files
 reports/*.html
 reports/*.json
+
+# Node / Playwright artifacts
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
