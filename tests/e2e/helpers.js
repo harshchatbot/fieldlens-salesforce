@@ -31,6 +31,17 @@ function sanitizePageUrl(urlValue) {
   }
 }
 
+function maskIdentityValue(value) {
+  const normalized = String(value || '');
+  if (!normalized) {
+    return 'unknown';
+  }
+  if (normalized.length <= 6) {
+    return `${normalized.slice(0, 2)}***`;
+  }
+  return `${normalized.slice(0, 3)}***${normalized.slice(-3)}`;
+}
+
 function classifySalesforceApiResult(result) {
   const contentType = String(result && result.contentType ? result.contentType : '');
   const status = Number(result && result.status ? result.status : 0);
@@ -588,6 +599,11 @@ async function getSalesforceIdentity(page) {
     }
   } else {
     console.log(`[FieldLens][Playwright] Failed to resolve Salesforce org identity: ${orgStatus.message}`);
+    console.log('[FieldLens][Playwright] Org lookup failed, using fallback identity');
+    console.log('[FieldLens][Playwright] Fallback scope marker:', `${sanitizeIdentityValue(result.hostname, 'unknown-host')}:${instanceKey}`);
+    console.log('[FieldLens][Playwright] Masked userId:', maskIdentityValue(userId));
+    console.log('[FieldLens][Playwright] Hostname:', result.hostname);
+    console.log('[FieldLens][Playwright] InstanceKey:', instanceKey);
   }
 
   return buildFallbackIdentity({

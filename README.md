@@ -193,6 +193,20 @@ FIELDLENS_SF_RECORD_URL="https://your-domain.lightning.force.com/lightning/r/Acc
 npm run test:e2e:salesforce
 ```
 
+Run FieldLens functional UI coverage on a Salesforce record page:
+
+```bash
+FIELDLENS_CONNECT_EXISTING_CHROME=true \
+FIELDLENS_USE_BOOTSTRAPPED_PROFILE=true \
+FIELDLENS_SKIP_DEEP_SCAN_TEST=true \
+FIELDLENS_SKIP_EXPORT_TEST=true \
+FIELDLENS_FUNCTIONAL_ACTION_TIMEOUT_MS=15000 \
+FIELDLENS_SCAN_FIELD=Phone \
+FIELDLENS_SCAN_FIELD_API=Phone \
+FIELDLENS_SF_RECORD_URL="https://hrshveersdomain-dev-ed.lightning.force.com/lightning/r/Account/0015i00000ZHi6mAAD/view" \
+npm run test:e2e:functional
+```
+
 For record-page-only validation, skip the setup-page test:
 
 ```bash
@@ -231,6 +245,19 @@ FIELDLENS_SF_RECORD_URL="https://your-sandbox.lightning.force.com/lightning/r/Ac
 FIELDLENS_SF_SECOND_RECORD_URL="https://your-prod.lightning.force.com/lightning/r/Account/<recordId>/view" \
 npm run test:e2e:isolation
 ```
+
+Recommended local connected-Chrome isolation command:
+
+```bash
+FIELDLENS_CONNECT_EXISTING_CHROME=true \
+FIELDLENS_USE_BOOTSTRAPPED_PROFILE=true \
+FIELDLENS_SKIP_LOGOUT_RELOGIN_TEST=true \
+FIELDLENS_SF_RECORD_URL="https://your-sandbox.lightning.force.com/lightning/r/Account/<recordId>/view" \
+FIELDLENS_SF_SECOND_RECORD_URL="https://your-prod.lightning.force.com/lightning/r/Account/<recordId>/view" \
+npx playwright test tests/e2e/salesforce-isolation.spec.js --headed --workers=1
+```
+
+If Salesforce org identity lookup is blocked with `401` or `403`, the isolation suite falls back to a safe scope using `hostname + instanceKey + userId` instead of failing the test.
 
 The same manual-login behavior applies to the isolation suite. If the Playwright browser opens on a Salesforce login page, complete login there and return to the terminal while the test waits for `/lightning/r/` to load.
 

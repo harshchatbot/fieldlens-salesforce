@@ -40,6 +40,7 @@
 
     const button = document.createElement('button');
     button.id = FIELDLENS_BUTTON_ID;
+    button.setAttribute('data-testid', 'fieldlens-floating-button');
     button.type = 'button';
     button.textContent = 'FieldLens';
     button.setAttribute('aria-label', 'Open FieldLens panel');
@@ -52,6 +53,7 @@
 
     const shell = document.createElement('aside');
     shell.id = FIELDLENS_PANEL_ID;
+    shell.setAttribute('data-testid', 'fieldlens-panel-shell');
     shell.setAttribute('aria-hidden', 'true');
     applyPanelShellStyles(shell);
 
@@ -220,7 +222,8 @@
         baseUrl: location.origin,
         objectApiName,
         fieldApiName,
-        scanMode
+        scanMode,
+        scanCorrelationId: payload.scanCorrelationId || null
       });
     }
 
@@ -398,6 +401,10 @@
     }
 
     const request = new Promise((resolve, reject) => {
+      console.log('[FieldLens] content sending background message', {
+        type: message.type,
+        scanCorrelationId: message.scanCorrelationId || null
+      });
       chrome.runtime.sendMessage(message, (response) => {
         const runtimeError = chrome.runtime.lastError;
         if (runtimeError) {
@@ -417,6 +424,10 @@
           return;
         }
 
+        console.log('[FieldLens] content received background response', {
+          type: message.type,
+          scanCorrelationId: response.data?.scanCorrelationId || response.error?.scanCorrelationId || message.scanCorrelationId || null
+        });
         resolve(response.data);
       });
     });

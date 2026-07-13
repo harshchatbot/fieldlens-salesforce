@@ -17,6 +17,17 @@ const SF_SECOND_RECORD_URL = process.env.FIELDLENS_SF_SECOND_RECORD_URL || '';
 const SF_LOGOUT_URL = process.env.FIELDLENS_SF_LOGOUT_URL || '';
 const SF_RELOGIN_RECORD_URL = process.env.FIELDLENS_SF_RELOGIN_RECORD_URL || '';
 const LOGIN_TIMEOUT_MS = Number(process.env.FIELDLENS_LOGIN_TIMEOUT_MS || 180000);
+const SKIP_LOGOUT_RELOGIN_TEST =
+  String(process.env.FIELDLENS_SKIP_LOGOUT_RELOGIN_TEST || '').toLowerCase() === 'true';
+
+function getIdentityScopeMarker(identity) {
+  const hostname = String(identity?.hostname || '').toLowerCase();
+  const userId = String(identity?.userId || '').toLowerCase();
+  if (identity?.orgId && identity.orgId !== 'unknown-org') {
+    return String(identity.orgId).toLowerCase();
+  }
+  return `${hostname}:${String(identity?.instanceKey || '').toLowerCase()}:${userId}`;
+}
 
 test.describe('FieldLens login and org isolation', () => {
   test.skip(!SF_RECORD_URL, 'Set FIELDLENS_SF_RECORD_URL to run isolation coverage.');
@@ -85,6 +96,8 @@ test.describe('FieldLens login and org isolation', () => {
     const serviceWorker = await getExtensionServiceWorker(context);
     const storage = await readExtensionStorage(serviceWorker);
     const fieldKeys = Object.keys(storage).filter((key) => key.startsWith('fields:'));
+    const scopeMarkerA = getIdentityScopeMarker(identityA);
+    const scopeMarkerB = getIdentityScopeMarker(identityB);
 
     expect(fieldKeys.length).toBeGreaterThan(0);
     expect(fieldKeys.some((key) => key.includes(String(identityA.userId || '').toLowerCase()))).toBeTruthy();
@@ -92,22 +105,21 @@ test.describe('FieldLens login and org isolation', () => {
       expect(fieldKeys.some((key) => key.includes(String(identityA.orgId || '').toLowerCase()))).toBeTruthy();
     } else {
       expect(fieldKeys.some((key) => key.includes(String(identityA.instanceKey || '').toLowerCase()))).toBeTruthy();
+      expect(fieldKeys.some((key) => key.includes(String(identityA.hostname || '').toLowerCase()))).toBeTruthy();
     }
     expect(fieldKeys.some((key) => key.includes(String(identityA.userId || '').toLowerCase()))).toBeTruthy();
     if (identityB.orgId && identityB.orgId !== 'unknown-org') {
       expect(fieldKeys.some((key) => key.includes(String(identityB.orgId || '').toLowerCase()))).toBeTruthy();
     } else {
       expect(fieldKeys.some((key) => key.includes(String(identityB.instanceKey || '').toLowerCase()))).toBeTruthy();
+      expect(fieldKeys.some((key) => key.includes(String(identityB.hostname || '').toLowerCase()))).toBeTruthy();
     }
     expect(fieldKeys.some((key) => key.includes(String(identityB.userId || '').toLowerCase()))).toBeTruthy();
-    const scopeMarkerA =
-      identityA.orgId && identityA.orgId !== 'unknown-org' ? String(identityA.orgId).toLowerCase() : String(identityA.instanceKey || '').toLowerCase();
-    const scopeMarkerB =
-      identityB.orgId && identityB.orgId !== 'unknown-org' ? String(identityB.orgId).toLowerCase() : String(identityB.instanceKey || '').toLowerCase();
     expect(fieldKeys.some((key) => key.includes(scopeMarkerA) && key.includes(scopeMarkerB))).toBeFalsy();
   });
 
   test('logout and re-login should not preserve previous page cache scope invisibly', async () => {
+    test.skip(SKIP_LOGOUT_RELOGIN_TEST, 'Skipping logout/re-login coverage because FIELDLENS_SKIP_LOGOUT_RELOGIN_TEST=true.');
     test.skip(!SF_LOGOUT_URL || !SF_RELOGIN_RECORD_URL, 'Set FIELDLENS_SF_LOGOUT_URL and FIELDLENS_SF_RELOGIN_RECORD_URL for session-switch coverage.');
 
     const page = await context.newPage();

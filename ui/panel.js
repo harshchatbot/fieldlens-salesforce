@@ -1,4 +1,5 @@
 (() => {
+  const SCAN_TIMEOUT_MS = Number(globalThis.FIELDLENS_SCAN_TIMEOUT_MS || 30000);
   const state = {
     context: null,
     allFields: [],
@@ -15,7 +16,9 @@
     hideZeroGroups: false,
     settingsLoaded: false,
     lastFailure: null,
-    showNoAccessInFallback: false
+    showNoAccessInFallback: false,
+    scanTimeoutTimer: null,
+    activeScanCorrelationId: null
   };
 
   const el = {
@@ -334,6 +337,7 @@
     for (const field of state.filteredFields) {
       const opt = document.createElement('option');
       opt.value = field.apiName;
+      opt.setAttribute('data-testid', 'field-result');
       const nonPermSuffix = field.isPermissionable === false ? ' [NP]' : '';
       opt.textContent = `${field.label} (${field.apiName}) [${field.dataType}]${nonPermSuffix}`;
       el.fieldSelect.appendChild(opt);
@@ -364,30 +368,27 @@
     resetResults();
     startScanLoading();
     setModeBadge(true);
+    const scanCorrelationId = `scan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    state.activeScanCorrelationId = scanCorrelationId;
+    console.log('[FieldLens] scan started', { scanCorrelationId, objectApiName, fieldApiName, scanMode: state.scanMode });
 
     try {
-      const result = await requestParent('scanImpact', { objectApiName, fieldApiName, scanMode: state.scanMode });
-      state.lastScan = result;
-      el.copyBtn.disabled = false;
-      if (el.exportCsvBtn) {
-        el.exportCsvBtn.disabled = false;
-      }
-      renderScanResult(result);
-      renderFreshness(result);
-      renderDiagnostics(result.warnings || []);
-      renderNonPermissionableBanner(result);
-      clearRetryState();
+      await runScanLifecycleWithTimeout({ objectApiName, fieldApiName, scanMode: state.scanMode, scanCorrelationId });
+      console.log('[FieldLens] scan completed', { scanCorrelationId, objectApiName, fieldApiName, scanMode: state.scanMode });
     } catch (error) {
       console.error('[FieldLens] scanImpact failed', error);
-      showError(error.message || 'Impact scan failed.');
-      el.copyBtn.disabled = true;
-      if (el.exportCsvBtn) {
-        el.exportCsvBtn.disabled = true;
-      }
-      setRetryState('scanImpact', { objectApiName, fieldApiName, scanMode: state.scanMode });
-      hideDiagnostics();
-      clearFreshness();
+      handleScanFailure(error.message || 'Impact scan failed.', {
+        objectApiName,
+        fieldApiName,
+        scanMode: state.scanMode,
+        scanCorrelationId
+      });
+      console.log('[FieldLens] scan failed', { scanCorrelationId, objectApiName, fieldApiName, scanMode: state.scanMode });
     } finally {
+      if (state.activeScanCorrelationId === scanCorrelationId) {
+        state.activeScanCorrelationId = null;
+      }
+      clearScanTimeoutGuard();
       hideLoading();
       setModeBadge(false);
     }
@@ -547,6 +548,11 @@
     if (!payload || typeof payload.requestId !== 'number') {
       return;
     }
+    console.log('[FieldLens] panel received response', {
+      requestId: payload.requestId,
+      scanCorrelationId: payload?.data?.scanCorrelationId || payload?.error?.scanCorrelationId || null,
+      ok: !!payload.ok
+    });
 
     const pending = pendingRequestMap.get(payload.requestId);
     if (!pending) {
@@ -563,6 +569,11 @@
 
   function requestParent(action, payload) {
     const requestId = ++requestIdCounter;
+    console.log('[FieldLens] message sent to background', {
+      action,
+      requestId,
+      scanCorrelationId: payload?.scanCorrelationId || null
+    });
     notifyParent({ source: 'fieldlens-panel', type: 'REQUEST', action, payload, requestId });
     const timeoutMs =
       action === 'scanImpact' && payload?.scanMode === 'deep'
@@ -748,8 +759,47 @@
     resetResults();
     startScanLoading();
     setModeBadge(true);
+    const scanCorrelationId = payload.scanCorrelationId || `scan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    state.activeScanCorrelationId = scanCorrelationId;
+    console.log('[FieldLens] scan started', {
+      scanCorrelationId,
+      objectApiName: payload.objectApiName,
+      fieldApiName: payload.fieldApiName,
+      scanMode: payload.scanMode || state.scanMode
+    });
     try {
+      await runScanLifecycleWithTimeout({ ...payload, scanCorrelationId });
+      console.log('[FieldLens] scan completed', {
+        scanCorrelationId,
+        objectApiName: payload.objectApiName,
+        fieldApiName: payload.fieldApiName,
+        scanMode: payload.scanMode || state.scanMode
+      });
+    } catch (error) {
+      handleScanFailure(error.message || 'Impact scan failed.', { ...payload, scanCorrelationId });
+      console.log('[FieldLens] scan failed', {
+        scanCorrelationId,
+        objectApiName: payload.objectApiName,
+        fieldApiName: payload.fieldApiName,
+        scanMode: payload.scanMode || state.scanMode
+      });
+    } finally {
+      if (state.activeScanCorrelationId === scanCorrelationId) {
+        state.activeScanCorrelationId = null;
+      }
+      clearScanTimeoutGuard();
+      hideLoading();
+      setModeBadge(false);
+    }
+  }
+
+  async function runScanLifecycleWithTimeout(payload) {
+    const scanCorrelationId = payload.scanCorrelationId;
+    const operation = (async () => {
       const result = await requestParent('scanImpact', payload);
+      if (state.activeScanCorrelationId !== scanCorrelationId) {
+        return result;
+      }
       state.lastScan = result;
       el.copyBtn.disabled = false;
       if (el.exportCsvBtn) {
@@ -760,16 +810,58 @@
       renderDiagnostics(result.warnings || []);
       renderNonPermissionableBanner(result);
       clearRetryState();
-    } catch (error) {
-      showError(error.message || 'Impact scan failed.');
-      setRetryState('scanImpact', payload);
-      if (el.exportCsvBtn) {
-        el.exportCsvBtn.disabled = true;
-      }
-    } finally {
-      hideLoading();
-      setModeBadge(false);
+      return result;
+    })();
+
+    const timeout = new Promise((_, reject) => {
+      clearScanTimeoutGuard();
+      state.scanTimeoutTimer = setTimeout(() => {
+        if (state.activeScanCorrelationId !== scanCorrelationId) {
+          return;
+        }
+        state.activeScanCorrelationId = null;
+        hideLoading();
+        setModeBadge(false);
+        renderScanFailure('Scan timed out. Please try again or use a smaller scan mode.');
+        showError('Scan timed out. Please try again or use a smaller scan mode.');
+        console.log('[FieldLens] scan timed out', {
+          scanCorrelationId,
+          objectApiName: payload.objectApiName,
+          fieldApiName: payload.fieldApiName,
+          scanMode: payload.scanMode || state.scanMode
+        });
+        reject(new Error('Scan timed out. Please try again or use a smaller scan mode.'));
+      }, SCAN_TIMEOUT_MS);
+    });
+
+    return Promise.race([operation, timeout]);
+  }
+
+  function clearScanTimeoutGuard() {
+    if (state.scanTimeoutTimer) {
+      clearTimeout(state.scanTimeoutTimer);
+      state.scanTimeoutTimer = null;
     }
+  }
+
+  function handleScanFailure(message, payload) {
+    showError(message);
+    renderScanFailure(message);
+    el.copyBtn.disabled = true;
+    if (el.exportCsvBtn) {
+      el.exportCsvBtn.disabled = true;
+    }
+    setRetryState('scanImpact', payload);
+    hideDiagnostics();
+    clearFreshness();
+  }
+
+  function renderScanFailure(message) {
+    el.emptyState.classList.add('hidden');
+    el.resultsContainer.innerHTML = `<div class="result-group"><div class="result-group-body"><div class="result-item"><span class="result-subtitle">${escapeHtml(
+      message
+    )}</span></div></div></div>`;
+    el.resultsContainer.classList.remove('hidden');
   }
 
   function renderFreshness(result) {

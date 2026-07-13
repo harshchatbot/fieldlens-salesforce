@@ -23,9 +23,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'FIELDLENS_SCAN_IMPACT') {
+    console.log('[FieldLens] background received message', {
+      type: message.type,
+      scanCorrelationId: message.scanCorrelationId || null
+    });
     handleScanImpact(message, sender?.tab?.id)
-      .then((data) => sendResponse({ ok: true, data }))
-      .catch((error) => sendResponse({ ok: false, error: toClientError(error) }));
+      .then((data) => {
+        console.log('[FieldLens] background sending response', {
+          type: message.type,
+          scanCorrelationId: message.scanCorrelationId || null,
+          ok: true
+        });
+        sendResponse({ ok: true, data: { ...data, scanCorrelationId: message.scanCorrelationId || null } });
+      })
+      .catch((error) => {
+        console.log('[FieldLens] background sending response', {
+          type: message.type,
+          scanCorrelationId: message.scanCorrelationId || null,
+          ok: false
+        });
+        sendResponse({
+          ok: false,
+          error: { ...toClientError(error), scanCorrelationId: message.scanCorrelationId || null }
+        });
+      });
     return true;
   }
 
