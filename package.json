@@ -1,6 +1,6 @@
 {
   "name": "fieldlens-salesforce",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "Test scaffold and QA tooling for FieldLens for Salesforce.",
   "scripts": {

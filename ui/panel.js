@@ -32,6 +32,7 @@
     retryLoadBtn: document.getElementById('retryLoadBtn'),
     retryScanBtn: document.getElementById('retryScanBtn'),
     warningBanner: document.getElementById('warningBanner'),
+    toast: document.getElementById('toast'),
     nonPermissionableBanner: document.getElementById('nonPermissionableBanner'),
     diagnosticsSection: document.getElementById('diagnosticsSection'),
     diagnosticsCount: document.getElementById('diagnosticsCount'),
@@ -126,7 +127,7 @@
       const markdown = buildMarkdownSummary(state.lastScan);
       try {
         await requestParent('copyToClipboard', { text: markdown });
-        showWarning('Summary copied to clipboard.');
+        showToast('Copied ✓');
       } catch (_) {
         showError('Could not copy summary on this page due to browser policy.');
       }
@@ -204,6 +205,9 @@
 
     el.fieldSelect.addEventListener('change', () => {
       state.selectedFieldApiName = el.fieldSelect.value || null;
+      if (state.context?.objectApiName && state.selectedFieldApiName && state.context.pageType === 'recordPage') {
+        el.contextLine.textContent = `${state.context.objectApiName}.${state.selectedFieldApiName}`;
+      }
     });
 
     document.addEventListener('keydown', (event) => {
@@ -419,16 +423,14 @@
       { key: 'flows', label: 'Flows' },
       { key: 'fieldPermissions', label: 'FLS / Permissions', itemsOverride: flsFiltered, totalCount: flsAll.length }
     ];
-    if (isDeep) {
-      groups.splice(
-        4,
-        0,
-        { key: 'formulaFields', label: 'Formula Fields' },
-        { key: 'pageLayouts', label: 'Page Layouts' },
-        { key: 'listViews', label: 'List Views' },
-        { key: 'reportTypes', label: 'Report Types' }
-      );
-    }
+    groups.splice(
+      4,
+      0,
+      { key: 'formulaFields', label: 'Formula Fields' },
+      { key: 'pageLayouts', label: 'Page Layouts' },
+      { key: 'listViews', label: 'List Views' },
+      { key: 'reportTypes', label: 'Report Types' }
+    );
 
     el.resultsContainer.innerHTML = '';
     let total = 0;
@@ -451,8 +453,11 @@
 
       const head = document.createElement('summary');
       head.className = 'result-group-header';
+      const skippedInQuick = !isDeep && !['validationRules', 'apexClasses', 'apexTriggers', 'flows', 'fieldPermissions'].includes(group.key);
       const countLabel =
-        typeof group.totalCount === 'number'
+        skippedInQuick
+          ? '—'
+          : typeof group.totalCount === 'number'
           ? `${items.length}/${group.totalCount}`
           : `${items.length}`;
       head.innerHTML = `<span>${group.label} (${countLabel})</span>`;
@@ -461,9 +466,14 @@
       const list = document.createElement('ul');
       list.className = 'result-list';
 
-      if (!items.length) {
+      if (skippedInQuick) {
         const li = document.createElement('li');
         li.className = 'result-item';
+        li.innerHTML = '<span class="result-link"><span class="result-subtitle">Not scanned in Quick mode</span></span>';
+        list.appendChild(li);
+      } else if (!items.length) {
+        const li = document.createElement('li');
+        li.className = 'result-item result-item-muted';
         li.innerHTML = '<span class="result-link"><span class="result-subtitle">No references</span></span>';
         list.appendChild(li);
       } else {
@@ -498,13 +508,14 @@
       });
     });
 
-    if (total === 0) {
+    if (total === 0 && isDeep) {
       el.emptyState.classList.remove('hidden');
       el.resultsContainer.classList.add('hidden');
     } else {
       el.emptyState.classList.add('hidden');
       el.resultsContainer.classList.remove('hidden');
     }
+    renderScanSummary(result, groups);
   }
 
   function buildMarkdownSummary(result) {
@@ -808,6 +819,9 @@
       renderScanResult(result);
       renderFreshness(result);
       renderDiagnostics(result.warnings || []);
+      if (Array.isArray(result.warnings) && result.warnings.some((warning) => /more metadata than the scan limit/i.test(warning))) {
+        showWarning('Results may be incomplete because this org has more metadata than the scan limit.');
+      }
       renderNonPermissionableBanner(result);
       clearRetryState();
       return result;
@@ -889,6 +903,25 @@
     el.freshnessBadge.textContent = `Cached ${ageMin}m ago`;
     el.freshnessBadge.classList.add('cached');
     el.freshnessBadge.classList.remove('hidden');
+  }
+
+  function renderScanSummary(result, groups) {
+    if (!el.resultsContainer) return;
+    const existing = el.resultsContainer.querySelector('.scan-summary');
+    if (existing) existing.remove();
+    const total = groups.reduce((sum, group) => sum + (Array.isArray(result.groups?.[group.key]) ? result.groups[group.key].length : 0), 0);
+    const summary = document.createElement('div');
+    summary.className = 'scan-summary';
+    summary.innerHTML = `<strong>${total} reference${total === 1 ? '' : 's'}</strong><span>${result.scanMode === 'deep' ? 'Deep' : 'Quick'} scan</span><span>${result.fromCache ? 'Cached' : 'Live'}</span>`;
+    el.resultsContainer.prepend(summary);
+  }
+
+  function showToast(message) {
+    if (!el.toast) return;
+    el.toast.textContent = message;
+    el.toast.classList.remove('hidden');
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => el.toast.classList.add('hidden'), 1800);
   }
 
   function clearFreshness() {
@@ -1004,7 +1037,10 @@
   }
 
   function csvEscape(value) {
-    const s = String(value ?? '');
+    let s = String(value ?? '');
+    if (/^[=+\-@]/.test(s)) {
+      s = `'${s}`;
+    }
     if (/[",\n]/.test(s)) {
       return `"${s.replace(/"/g, '""')}"`;
     }

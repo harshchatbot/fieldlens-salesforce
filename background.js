@@ -226,11 +226,11 @@ async function handleScanImpact(message, tabId) {
 
     const apexClassSoql = `SELECT Id, Name, Body FROM ApexClass ORDER BY Name`;
     const apexTriggerSoql = `SELECT Id, Name, TableEnumOrId, Body FROM ApexTrigger ORDER BY Name`;
-    const validationSoql = `SELECT Id, ValidationName, Active, EntityDefinitionId, ErrorConditionFormula FROM ValidationRule ORDER BY ValidationName`;
+    const validationSoql = `SELECT Id, ValidationName, Active, EntityDefinitionId, EntityDefinition.QualifiedApiName, ErrorConditionFormula FROM ValidationRule ORDER BY ValidationName`;
     const [classesRes, triggersRes, validationRes, flowsRes, flsRes, formulaRes, layoutRes, listViewRes, reportTypeRes] = await Promise.allSettled([
       runToolingQuery(baseUrl, apexClassSoql, tabId),
       runToolingQuery(baseUrl, apexTriggerSoql, tabId),
-      runValidationRuleBestEffort(baseUrl, validationSoql, fieldApiName, tabId, isDeep),
+      runValidationRuleBestEffort(baseUrl, validationSoql, objectApiName, fieldApiName, tabId, isDeep),
       isDeep ? runFlowBestEffortQuery(baseUrl, escapedField, tabId) : Promise.resolve([]),
       runFieldPermissionsBestEffortQuery(baseUrl, objectApiName, fullFieldName, tabId),
       isDeep ? runFormulaFieldBestEffortQuery(baseUrl, objectApiName, fieldApiName, fullFieldName, tabId) : Promise.resolve([]),
@@ -361,6 +361,10 @@ async function handleScanImpact(message, tabId) {
     if (isDeep && layoutRes.status === 'rejected') warnings.push(layoutRes.reason.message);
     if (isDeep && listViewRes.status === 'rejected') warnings.push(listViewRes.reason.message);
     if (isDeep && reportTypeRes.status === 'rejected') warnings.push(reportTypeRes.reason.message);
+    const deepMetadataResults = [flowsRes, formulaRes, layoutRes, listViewRes, reportTypeRes];
+    if (isDeep && deepMetadataResults.some((result) => result.status === 'fulfilled' && Array.isArray(result.value) && result.value.length >= 200)) {
+      warnings.push('Results may be incomplete because this org has more metadata than the scan limit.');
+    }
 
     const coreResults = [classesRes, triggersRes, validationRes];
     // If all primary categories fail, return a top-level error instead of empty data.
@@ -484,13 +488,11 @@ function resolveSettledRecords(settled) {
   return [];
 }
 
-async function runValidationRuleBestEffort(baseUrl, primarySoql, fieldApiName, tabId, allowMetadataFallback) {
-  const lowerField = String(fieldApiName || '').toLowerCase();
-
+async function runValidationRuleBestEffort(baseUrl, primarySoql, objectApiName, fieldApiName, tabId, allowMetadataFallback) {
   try {
     const records = await runToolingQuery(baseUrl, primarySoql, tabId);
-    const filtered = records.filter((item) =>
-      String(item?.ErrorConditionFormula || '').toLowerCase().includes(lowerField)
+    const filtered = core.filterValidationRulesByObject(records, objectApiName).filter((item) =>
+      core.containsFieldReferenceText(item?.ErrorConditionFormula || '', fieldApiName, `${objectApiName}.${fieldApiName}`)
     );
     return { records: filtered };
   } catch (error) {
@@ -509,9 +511,12 @@ async function runValidationRuleBestEffort(baseUrl, primarySoql, fieldApiName, t
   const fallbackSoql = `SELECT Id, ValidationName, Active, EntityDefinitionId, Metadata FROM ValidationRule ORDER BY ValidationName`;
   try {
     const records = await runToolingQuery(baseUrl, fallbackSoql, tabId);
-    const filtered = records.filter((item) =>
-      JSON.stringify(item?.Metadata || {}).toLowerCase().includes(lowerField)
-    );
+    const filtered = records.filter((item) => {
+      const entityName = item?.EntityDefinition?.QualifiedApiName || item?.Metadata?.EntityDefinition?.QualifiedApiName;
+      return entityName === objectApiName && core.containsFieldReferenceText(
+        JSON.stringify(item?.Metadata || {}), fieldApiName, `${objectApiName}.${fieldApiName}`
+      );
+    });
     return {
       records: filtered,
       warning: 'Validation Rule formula field is unavailable in this org; using metadata best-effort matching.'
@@ -1289,18 +1294,11 @@ function escapeSoqlValue(value) {
 }
 
 function filterByBodyFieldReference(records, fieldApiName) {
-  const needle = String(fieldApiName || '').toLowerCase();
-  if (!needle) {
-    return [];
-  }
-  return records.filter((item) => String(item?.Body || '').toLowerCase().includes(needle));
+  return records.filter((item) => core.containsFieldReferenceText(String(item?.Body || ''), fieldApiName));
 }
 
 function containsFieldReferenceText(text, fieldApiName, fullFieldName) {
-  const haystack = String(text || '').toLowerCase();
-  const shortNeedle = String(fieldApiName || '').toLowerCase();
-  const fullNeedle = String(fullFieldName || '').toLowerCase();
-  return (!!shortNeedle && haystack.includes(shortNeedle)) || (!!fullNeedle && haystack.includes(fullNeedle));
+  return core.containsFieldReferenceText(text, fieldApiName, fullFieldName);
 }
 
 function resolveLayoutDisplayName(layout) {

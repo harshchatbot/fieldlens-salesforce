@@ -31,6 +31,26 @@ function testCsvGeneration() {
   assert.strictEqual(rows[0][0], 'Group');
   assert.strictEqual(rows[1][0], 'Apex Classes');
   assert.strictEqual(core.csvEscape('a,"b"'), '"a,""b"""');
+  assert.strictEqual(core.csvEscape('=SUM(A1:A2)'), "'=SUM(A1:A2)");
+  assert.strictEqual(core.csvEscape('+unsafe'), "'+unsafe");
+  assert.strictEqual(core.csvEscape('-unsafe'), "'-unsafe");
+  assert.strictEqual(core.csvEscape('@unsafe'), "'@unsafe");
+}
+
+function testFieldReferenceMatching() {
+  assert.strictEqual(core.containsFieldReferenceText('Status__c', 'Status__c'), true);
+  assert.strictEqual(core.containsFieldReferenceText('Old_Status__c', 'Status__c'), false);
+  assert.strictEqual(core.containsFieldReferenceText('Username', 'Name'), false);
+  assert.strictEqual(core.containsFieldReferenceText('Account.Name', 'Name', 'Account.Name'), true);
+  assert.strictEqual(core.containsFieldReferenceText('$ObjectType.Account.Fields.Name', 'Name', 'Account.Name'), true);
+  const accountRules = core.filterValidationRulesByObject(
+    [
+      { ValidationName: 'AccountRule', EntityDefinition: { QualifiedApiName: 'Account' } },
+      { ValidationName: 'LeadRule', EntityDefinition: { QualifiedApiName: 'Lead' } }
+    ],
+    'Account'
+  );
+  assert.deepStrictEqual(accountRules.map((rule) => rule.ValidationName), ['AccountRule']);
 }
 
 function testSettingsNormalization() {
@@ -200,6 +220,7 @@ function testIdentityFallbackScenarios() {
 function run() {
   testContextParsing();
   testCsvGeneration();
+  testFieldReferenceMatching();
   testSettingsNormalization();
   testGroupFilter();
   testManifestSecurityShape();

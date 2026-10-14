@@ -54,10 +54,47 @@
 
   function csvEscape(value) {
     var s = String(value == null ? '' : value);
+    if (/^[=+\-@]/.test(s)) {
+      s = "'" + s;
+    }
     if (/[",\n]/.test(s)) {
       return '"' + s.replace(/"/g, '""') + '"';
     }
     return s;
+  }
+
+  function containsFieldReferenceText(text, fieldApiName, fullFieldName) {
+    var haystack = String(text == null ? '' : text);
+    var field = String(fieldApiName || '').trim();
+    var full = String(fullFieldName || '').trim();
+    if (!field) {
+      return false;
+    }
+    var escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    var references = [
+      new RegExp('(^|[^A-Za-z0-9_])' + escapedField + '(?=[^A-Za-z0-9_]|$)', 'i')
+    ];
+    if (full) {
+      var escapedFull = full.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      references.push(new RegExp('(^|[^A-Za-z0-9_])' + escapedFull + '(?=[^A-Za-z0-9_]|$)', 'i'));
+    }
+    var objectName = full.split('.')[0];
+    if (objectName) {
+      var escapedObject = objectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      references.push(
+        new RegExp('\\$ObjectType\\.' + escapedObject + '\\.Fields\\.' + escapedField + '(?=[^A-Za-z0-9_]|$)', 'i')
+      );
+    }
+    return references.some(function (reference) {
+      return reference.test(haystack);
+    });
+  }
+
+  function filterValidationRulesByObject(records, objectApiName) {
+    var objectName = String(objectApiName || '');
+    return (Array.isArray(records) ? records : []).filter(function (record) {
+      return String(record && record.EntityDefinition && record.EntityDefinition.QualifiedApiName || '') === objectName;
+    });
   }
 
   function buildImpactCsvRows(result) {
@@ -154,6 +191,8 @@
     normalizeSettings: normalizeSettings,
     shouldShowGroup: shouldShowGroup,
     csvEscape: csvEscape,
+    containsFieldReferenceText: containsFieldReferenceText,
+    filterValidationRulesByObject: filterValidationRulesByObject,
     buildImpactCsvRows: buildImpactCsvRows,
     normalizeHostnameFromBaseUrl: normalizeHostnameFromBaseUrl,
     buildIdentityScope: buildIdentityScope,
