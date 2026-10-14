@@ -13,6 +13,7 @@
     "test:e2e:salesforce": "playwright test tests/e2e/salesforce-headed.spec.js --headed",
     "test:e2e:salesforce:local": "FIELDLENS_CONNECT_EXISTING_CHROME=true FIELDLENS_USE_BOOTSTRAPPED_PROFILE=true FIELDLENS_SKIP_SETUP_TEST=true playwright test tests/e2e/salesforce-headed.spec.js --headed --workers=1 && FIELDLENS_CONNECT_EXISTING_CHROME=true FIELDLENS_USE_BOOTSTRAPPED_PROFILE=true FIELDLENS_SKIP_LOGOUT_RELOGIN_TEST=true FIELDLENS_SF_RECORD_URL=$FIELDLENS_SF_RECORD_URL FIELDLENS_SF_SECOND_RECORD_URL=$FIELDLENS_SF_SECOND_RECORD_URL playwright test tests/e2e/salesforce-isolation.spec.js --headed --workers=1 && FIELDLENS_CONNECT_EXISTING_CHROME=true FIELDLENS_USE_BOOTSTRAPPED_PROFILE=true FIELDLENS_SKIP_DEEP_SCAN_TEST=true FIELDLENS_SKIP_EXPORT_TEST=true FIELDLENS_FUNCTIONAL_ACTION_TIMEOUT_MS=45000 FIELDLENS_SCAN_FIELD_API=Phone FIELDLENS_SCAN_FIELD=Phone playwright test tests/e2e/salesforce-functional.spec.js --headed --workers=1",
     "test:e2e:functional": "playwright test tests/e2e/salesforce-functional.spec.js --headed",
+    "test:e2e:webstore": "FIELDLENS_CONNECT_EXISTING_CHROME=true FIELDLENS_VALIDATE_WEBSTORE_EXTENSION=true playwright test tests/e2e/salesforce-webstore.spec.js --headed --workers=1",
     "test:e2e:isolation": "playwright test tests/e2e/salesforce-isolation.spec.js --headed",
     "test:security": "node scripts/unit_tests.js && playwright test tests/e2e/salesforce-isolation.spec.js --headed"
   },

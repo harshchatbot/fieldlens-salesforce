@@ -803,6 +803,7 @@ module.exports = {
   launchFieldLensExtensionContext,
   shouldClosePlaywrightContext,
   getExtensionId,
+  getExtensionIdFromChromeExtensionsPage,
   openExtensionPage,
   assertExtensionLoaded,
   diagnoseExtensionLoaded,

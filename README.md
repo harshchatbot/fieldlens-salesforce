@@ -179,6 +179,16 @@ Connect to an already-open Chrome session:
 npm run test:e2e:salesforce:local
 ```
 
+### Chrome Web Store smoke test
+
+This mode validates the installed Chrome Web Store extension, not the local unpacked extension. Use a clean Chrome profile with remote debugging enabled, install **FieldLens for Salesforce** from the Chrome Web Store, log in to Salesforce, and keep Chrome open. Then run:
+
+```bash
+npm run test:e2e:webstore
+```
+
+The test connects to the existing Chrome instance, verifies the installed extension name and id through `chrome://extensions`, then validates the Salesforce record-page flow: launcher, panel, Name and Phone field selection, Quick Scan, Copy Summary, and close-panel behavior. It does not read cookies, tokens, session ids, authorization headers, or raw Salesforce API responses.
+
 This local script runs:
 
 - headed Salesforce page injection coverage
