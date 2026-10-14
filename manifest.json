@@ -9,7 +9,12 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage", "activeTab", "scripting", "cookies"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "cookies"
+  ],
   "host_permissions": [
     "https://*.salesforce.com/*",
     "https://*.my.salesforce.com/*",
@@ -36,20 +41,28 @@
         "https://*.lightning.force.com/lightning/*",
         "https://*.salesforce-setup.com/lightning/*"
       ],
-      "js": ["shared/fieldlens_core.js", "content.js"],
+      "js": [
+        "shared/fieldlens_core.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
-  {
-    "resources": ["ui/panel.html", "ui/panel.css", "ui/panel.js", "ui/techfi-logo.svg", "shared/fieldlens_core.js"],
-    "matches": [
-      "https://*.salesforce.com/*",
-      "https://*.my.salesforce.com/*",
-      "https://*.lightning.force.com/*",
-      "https://*.salesforce-setup.com/lightning/*"
-    ]
-  }
-]
-
+    {
+      "resources": [
+        "ui/panel.html",
+        "ui/panel.css",
+        "ui/panel.js",
+        "ui/techfi-logo.svg",
+        "shared/fieldlens_core.js"
+      ],
+      "matches": [
+        "https://*.salesforce.com/*",
+        "https://*.my.salesforce.com/*",
+        "https://*.lightning.force.com/*",
+        "https://*.salesforce-setup.com/*"
+      ]
+    }
+  ]
 }
