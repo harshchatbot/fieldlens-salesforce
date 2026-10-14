@@ -172,7 +172,22 @@ Connect to an already-open Chrome session:
 
 2. In that Chrome window, confirm FieldLens is installed and enabled.
 3. Log in to Salesforce in that same Chrome window.
-4. Keep Chrome open, then run:
+4. Keep Chrome open.
+5. Run:
+
+```bash
+npm run test:e2e:salesforce:local
+```
+
+This local script runs:
+
+- headed Salesforce page injection coverage
+- login and org isolation coverage
+- functional FieldLens UI coverage
+
+You can still run the individual suites directly if you only want one layer of coverage.
+
+For a single-suite connected-Chrome run, use:
 
 ```bash
 FIELDLENS_CONNECT_EXISTING_CHROME=true \

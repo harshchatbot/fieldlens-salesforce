@@ -302,6 +302,17 @@ async function smokeSafeToolbarButtons(page) {
   const excludePattern =
     /Apex Trigger|Flow|Validation Rule|Permission|Field|Object:|AccountTrigger|Expand result|Collapse result|run impact scan|copy summary|export csv|close panel|quick|deep/i;
   const safeTestIds = ['settings-button', 'expand-all-button', 'collapse-all-button'];
+  const resultButtons = await getVisibleFieldLensButtons(page, {
+    scopeSelector: '[data-testid="results-container"]'
+  });
+  const resultCandidates = resultButtons.filter((button) => {
+    if (button.disabled || !button.visible || button.hidden) {
+      return false;
+    }
+    return safeTestIds.includes(button.testId);
+  });
+  expect(resultCandidates.length, 'Toolbar smoke must not include scan result buttons.').toBe(0);
+
   const buttons = await getVisibleFieldLensButtons(page, {
     scopeSelector: '[data-testid="fieldlens-toolbar"], [data-testid="fieldlens-action-bar"]'
   });
